@@ -113,6 +113,20 @@ describe('opening the sheet', () => {
 		expect(document.querySelectorAll('[data-test="inbox-sheet"]')).toHaveLength(1);
 	});
 
+	it('the View rail has a Scale bar switch: off hides the bar on the sheet, on brings it back, and the choice is kept', async () => {
+		await mount([withThumb(A)]);
+		thumbButton('3fa9c1d2_A1.tif').click();
+		await vi.waitFor(() => expect(document.querySelector('[data-test="sheet-scalebar"]')).not.toBeNull());
+		const sw = () => document.querySelector<HTMLInputElement>('[data-test="toggle-sheet-scalebar"]')!;
+		expect(sw().checked).toBe(true);
+		sw().click();
+		await vi.waitFor(() => expect(document.querySelector('[data-test="sheet-scalebar"]')).toBeNull());
+		expect(sw().checked).toBe(false);
+		expect(document.querySelector('[data-test="sheet-image"]')).not.toBeNull(); // the picture stays, only the bar goes
+		sw().click();
+		await vi.waitFor(() => expect(document.querySelector('[data-test="sheet-scalebar"]')).not.toBeNull());
+	});
+
 	it('shows no scale bar when the file says no pixel size', async () => {
 		await mount([withThumb(A, { extracted: { kv: 15, sources: { kv: 'metadata' }, flags: {} } })]);
 		thumbButton('3fa9c1d2_A1.tif').click();

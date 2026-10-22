@@ -28,6 +28,8 @@ import type { PictureState } from './usePicture';
 import { createInbox, type Outcome } from './useInbox';
 import { createMeasurements } from './useMeasurements';
 import { useViewSettings, type CompareMode } from './useViewSettings';
+import { hasSiblings } from './linkedModel';
+import { useSiblings } from './useSiblings';
 import { TEXT_ENTRY, listBase, listPath, neighbours, partnerOf, positionText, swapCandidate } from './viewBoxModel';
 
 // The view box page (/inbox/file/:candidateId, spec 2026-10-20-inbox-file-viewer-design.md decisions 4, 8, 9 and 10): one found file on a RecordLayout page. Left,
@@ -69,6 +71,8 @@ async function reload(): Promise<void> {
 }
 // The list as far as it has been read: the pages that held the file, and any read since (a Next off the last row read reads the page after it).
 const file = computed<FoundFile | null>(() => (located.value ? rows.value.find((f) => f.candidate_id === props.candidateId) ?? null : null));
+// The other pictures on this file's record (the Link card's strip); Compare finds its second file among them too, and a person can open one from the strip.
+const siblings = useSiblings(host.api, () => (file.value && hasSiblings(file.value) ? file.value.candidate_id : null));
 const around = computed(() => (located.value ? neighbours(rows.value.map((f) => f.candidate_id), props.candidateId) : null));
 /** Whether a file follows this one: its row is in hand, or the list goes on past what was read (the server's total, under the page's row cap). */
 const hasNext = computed(() => !!around.value && (!!around.value.next || (!!located.value && !exhausted.value && around.value.index < located.value.total - 1 && rows.value.length < LOCATE_MAX_ROWS)));
@@ -187,13 +191,14 @@ async function resolvePartner(): Promise<void> {
 		partner.value = { state: 'none' };
 		return;
 	}
-	const hit = rows.value.find((f) => f.candidate_id === id);
+	// in the list, or one of this file's siblings (a picture of the same record, which the list's filters may not hold)
+	const hit = rows.value.find((f) => f.candidate_id === id) ?? siblings.rows.value.find((f) => f.candidate_id === id);
 	if (hit) {
 		partner.value = { state: 'ready', file: hit };
 		return;
 	}
 	partner.value = { state: 'loading' };
-	if (!located.value) return; // the list is still coming: this runs again when it is in
+	if (!located.value || siblings.loading.value) return; // the list, or the siblings, are still coming: this runs again when they are in
 	try {
 		const got = await locateFile(host.api, filters.value, id, () => mine !== partnerToken);
 		if (mine !== partnerToken) return;
@@ -209,7 +214,7 @@ async function resolvePartner(): Promise<void> {
 	}
 }
 // The lookup waits for the list to be there; a reload or `leave()` swapping it for a new object must not run it again.
-watch([partnerId, () => !!located.value], () => void resolvePartner(), { immediate: true });
+watch([partnerId, () => !!located.value, () => siblings.loading.value], () => void resolvePartner(), { immediate: true });
 const partnerFile = computed(() => (partner.value.state === 'ready' ? partner.value.file : null));
 /** The files the picker offers: pictures in the list, never the open file. */
 const candidates = computed(() => rows.value.filter((f) => f.candidate_id !== props.candidateId && IMAGE_KINDS.includes(f.kind)));
@@ -327,7 +332,9 @@ async function choose(rec: { collection: string; id: string }) {
 	if (!f || dialogBusy.value) return;
 	dialogBusy.value = true;
 	dialogError.value = '';
-	const r = await act(() => inbox.link(f, rec.collection, rec.id));
+	// a file that is already linked is changed to another record: it stays in this list, so the page reads it again instead of moving on
+	const r = f.state === 'linked' ? await inbox.relink(f, rec.collection, rec.id) : await act(() => inbox.link(f, rec.collection, rec.id));
+	if (r.ok && f.state === 'linked') await reload();
 	dialogBusy.value = false;
 	if (r.ok) dialogOpen.value = false;
 	else dialogError.value = r.message;
@@ -346,6 +353,19 @@ async function addScan(form: ScanAddForm) {
 		scanField.value = r.field ?? '';
 	}
 }
+// The Link card: Open the record's page, Change… (the Link dialog), Undo link (the card has asked; the file and its whole link batch go back to the Inbox).
+const openRecord = (to: string) => openLink(to, router);
+function changeLink(): void {
+	dialogError.value = '';
+	dialogOpen.value = true;
+}
+const undoLink = () => file.value?.link_batch_id && void act(() => inbox.undo({ kind: 'batch', id: file.value?.link_batch_id as string }));
+// The strip: a picture of the same record opens in this page (in place when this list holds it, else found under the Recently linked list); Compare with… sets it beside this one.
+function openSibling(id: string): void {
+	if (rows.value.some((f) => f.candidate_id === id)) return go(id);
+	void router.replace({ path: swapCandidate(route.path, id), query: { tab: 'linked' } });
+}
+const compareSibling = (id: string) => pickPartner(id);
 const dismiss = () => file.value && void act(() => inbox.dismiss(file.value as FoundFile));
 const restore = () => file.value && void act(() => inbox.restore(file.value as FoundFile));
 async function undo(u: NonNullable<NonNullable<typeof notice.value>['undo']>) {
@@ -419,6 +439,7 @@ const pageTitle = computed(() => (file.value ? nameOf(file.value.rel_path) : 'Fo
 const hasImaging = computed(() => !!file.value && (settingsOf(file.value).length > 0 || !!extractedText(file.value.extracted)));
 const contents = computed<ContentsEntry[]>(() => [
 	{ id: 'picture', title: 'Picture', count: null },
+	...(file.value?.state === 'linked' ? [{ id: 'linked', title: 'Linked to', count: null }] : []),
 	...(hasImaging.value ? [{ id: 'imaging', title: 'Imaging settings', count: null }] : []),
 	{ id: 'where', title: 'Where it is', count: null },
 ]);
@@ -464,10 +485,18 @@ const whereFacts = computed<Fact[]>(() => {
 							:busy="busy"
 							:copied="copied"
 							:contents="contents"
+							:siblings="siblings.rows.value"
+							:siblings-total="siblings.total.value"
+							:undoing="inbox.undoing.value !== null"
 							@link="link"
 							@dismiss="dismiss"
 							@restore="restore"
 							@copy="copyPath"
+							@open-record="openRecord"
+							@change="changeLink"
+							@undo="undoLink"
+							@open-sibling="openSibling"
+							@compare-sibling="compareSibling"
 						/>
 					</template>
 

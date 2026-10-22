@@ -9,6 +9,8 @@
 //
 //   GET  /d1-inbox/summary              -> { data: InboxSummary } (see @d1/ui inboxSummary.ts; the badge and Home panel read it too)
 //   GET  /d1-inbox/files?<FilesQuery>   -> { data: FoundFile[], meta: { total, limit, offset, acceptable | null } }
+//   GET  /d1-inbox/siblings?file=<id>&limit=  -> { data: FoundFile[], meta: { total, limit } }: the OTHER pictures linked to the same sample, operation or test
+//                                       as that file (the list's own visibility); empty for a file with no such record; 404 for a file the caller cannot see
 //   GET  /d1-inbox/files/<id>/thumb | /preview  -> the picture itself (image/jpeg, not { data }), only for a file with has_thumbnail; 404 when the
 //                                       caller cannot see the file or it has none. Fetched as a blob with the signed-in session (loadPicture).
 //   POST /d1-inbox/link                 { items: [{ candidate_id, collection, record_id } | ScanLinkItem] } -> { data: { link_batch_id, linked: <count>, items } };
@@ -20,6 +22,9 @@
 //                                       `acceptable`) and the files it would link (`ids`, or `items`); candidate_ids links exactly those
 //   POST /d1-inbox/dismiss | /restore   { candidate_ids } -> { data: { changed, changed_ids, unchanged_ids } }
 //   POST /d1-inbox/undo                 { link_batch_id } -> { data: { link_batch_id, undone } }
+//   POST /d1-inbox/relink               { candidate_id, collection, record_id } -> the answer of /link (a new batch of one): Change a LINKED file's record, atomically: its own
+//                                       link is undone and the new one made in one transaction, so a refusal (403 FORBIDDEN not editable, 404, 409 ALREADY_ON_RECORD / NOT_LINKED)
+//                                       changes nothing
 //   POST /d1-inbox/rescan               202 { data: { queued: true } }; 429 (extensions.retry_after_seconds) within 10 minutes or while a scan is
 //                                       queued or running; 409 NO_FOLDER when the person has no folder
 //   GET  /d1-inbox/prefs, PUT /d1-inbox/prefs { auto_link } -> { data: { auto_link } }
@@ -41,6 +46,9 @@
 //                                       400 INVALID_PAYLOAD with extensions.field kind | points | label; 409 TOO_MANY_MEASUREMENTS at 200 a file)
 //   PATCH /d1-inbox/files/<id>/measurements/<measurement id> { label } -> { data: SavedMeasurement } (the owner or the shape's author)
 //   DELETE /d1-inbox/files/<id>/measurements/<measurement id> -> { data: { measurement_id } } (the same two people)
+//   GET  /d1-inbox/progress[?all=1]     -> { data: { folders: [{ owner: { kind, id, name, folder, root, has_login }, folders_known, folders_listed, files, images,
+//                                       images_read, images_with_thumb, sem, sem_with_scale }], last_scan_finished_at } }: the crawler's scan progress per folder (the
+//                                       caller's own, or with all=1 every folder: administrators only, 403 otherwise). Counts only; the percentages are progressModel.ts's.
 //   GET  /d1-inbox/admin                -> { data: InboxAdmin } (administrators only)
 //   POST /d1-inbox/admin/scan-all       202 { data: { queued: true } }; 409 ALREADY_QUEUED while one waits
 //
@@ -50,7 +58,7 @@
 import { asRecord, errorText, parseSummary, type HostApi, type InboxSummary } from '@d1/ui';
 import type {
 	AcceptAllResult, AcceptOptions, CrawlerStatus, FileKind, FileMatch, FileOwner, FilesPage, FilesQuery, FoundFile, IgnoredAdded, IgnoredList, IgnoredRemoved, IgnoredRule, InboxAdmin,
-	InboxPrefs, LinkItem, LinkResult, MatchStrength, LinkedItem, MeasurementKind, MeasurementList, NewMeasurement, PersonWithoutAlias, SavedMeasurement, ScanError, ScanLinkItem, Skipped,
+	InboxPrefs, LinkItem, LinkResult, MatchStrength, LinkedItem, MeasurementKind, MeasurementList, NewMeasurement, PersonWithoutAlias, ProgressFolder, SavedMeasurement, ScanError, ScanLinkItem, ScanProgress, SiblingsPage, Skipped,
 } from './inboxApiTypes';
 
 export type * from './inboxApiTypes';
@@ -145,12 +153,15 @@ export function parseFile(v: unknown): FoundFile | null {
 		linked_collection: str(r.linked_collection),
 		linked_record_id: str(r.linked_record_id),
 		linked_label: str(r.linked_label),
+		linked_title: str(r.linked_title),
+		link_batch_size: num(r.link_batch_size),
 		decided_by_name: str(r.decided_by_name),
 		duplicate_of_owner: parseDuplicateOwner(r.duplicate_of_owner),
 		owner: parseOwner(r.owner),
 		has_thumbnail: r.has_thumbnail === true,
 	};
 	if (typeof r.suggested_can_edit === 'boolean') file.suggested_can_edit = r.suggested_can_edit;
+	if (typeof r.can_undo === 'boolean') file.can_undo = r.can_undo;
 	if (str(r.name)) file.name = str(r.name) as string;
 	if (typeof r.mime_type === 'string' || r.mime_type === null) file.mime_type = r.mime_type;
 	if (typeof r.adopted === 'boolean') file.adopted = r.adopted;
@@ -213,6 +224,17 @@ export const loadFiles = (api: HostApi, q: FilesQuery): Promise<FilesPage> =>
 		},
 	);
 
+/** The other pictures linked to the same record as `candidateId` (at most `limit`, newest link first) and their total. An older server has no such route: that is a 404, as for a file nobody may see. */
+export const loadSiblings = (api: HostApi, candidateId: string, limit: number): Promise<SiblingsPage> =>
+	call(
+		() => api.get(`${BASE}/siblings`, { params: { file: candidateId, limit } }),
+		(body) => {
+			const rows = (Array.isArray(body) ? body : Array.isArray(body.data) ? body.data : []).map(parseFile).filter((f: FoundFile | null): f is FoundFile => f !== null);
+			const meta = (body && typeof body === 'object' && !Array.isArray(body) ? body.meta : null) ?? {};
+			return { rows, total: num(meta.total) ?? rows.length };
+		},
+	);
+
 /** The items of a link or accept-all answer: the ones that name a file and a record. */
 function linkedItems(v: unknown): LinkedItem[] {
 	return (Array.isArray(v) ? v : [])
@@ -271,6 +293,16 @@ export const dismissFiles = (api: HostApi, candidateIds: string[]): Promise<numb
 
 export const restoreFiles = (api: HostApi, candidateIds: string[]): Promise<number> =>
 	call(() => api.post(`${BASE}/restore`, { candidate_ids: candidateIds }), (b) => num(b.changed) ?? candidateIds.length);
+
+/** Change the record a LINKED file is on, in one request: the server undoes that file's link and links it to `recordId` in one transaction (a refusal changes nothing). */
+export const relinkFile = (api: HostApi, item: LinkItem): Promise<LinkResult> =>
+	call(
+		() => api.post(`${BASE}/relink`, item),
+		(b) => {
+			const done = linkedItems(b.items);
+			return { link_batch_id: String(b.link_batch_id ?? ''), linked: linkedCount(b, done), items: done };
+		},
+	);
 
 export const undoBatch = (api: HostApi, linkBatchId: string): Promise<number> =>
 	call(() => api.post(`${BASE}/undo`, { link_batch_id: linkBatchId }), (b) => num(b.undone) ?? 0);
@@ -345,6 +377,31 @@ export const loadAdmin = (api: HostApi): Promise<InboxAdmin> =>
 			queued_requests: num(b.queued_requests) ?? 0,
 			queue: { queued: num(b.queue?.queued) ?? 0, running: num(b.queue?.running) ?? 0 },
 			candidates: Object.fromEntries(Object.entries(b.candidates && typeof b.candidates === 'object' ? b.candidates : {}).map(([k, v]) => [k, num(v) ?? 0])),
+		}),
+	);
+
+/** One folder of the progress answer, or null for a row with no owner id (nothing to show it by). A missing count is 0. */
+export function parseProgressFolder(v: unknown): ProgressFolder | null {
+	if (!v || typeof v !== 'object') return null;
+	const r = v as Record<string, any>;
+	const o = (r.owner && typeof r.owner === 'object' ? r.owner : {}) as Record<string, unknown>;
+	const id = str(o.id);
+	if (!id) return null;
+	const count = (k: string) => Math.max(0, num(r[k]) ?? 0);
+	return {
+		owner: { kind: o.kind === 'team' ? 'team' : 'person', id, name: str(o.name) ?? '', folder: str(o.folder) ?? '', root: str(o.root) ?? '', has_login: typeof o.has_login === 'boolean' ? o.has_login : null },
+		folders_known: count('folders_known'), folders_listed: count('folders_listed'), files: count('files'), images: count('images'), images_read: count('images_read'),
+		images_with_thumb: count('images_with_thumb'), sem: count('sem'), sem_with_scale: count('sem_with_scale'),
+	};
+}
+
+/** The scan progress of the caller's own folders, or (all: true, administrators) of every folder. */
+export const loadProgress = (api: HostApi, opts: { all?: boolean } = {}): Promise<ScanProgress> =>
+	call(
+		() => api.get(`${BASE}/progress`, opts.all ? { params: { all: 1 } } : undefined),
+		(b) => ({
+			folders: (Array.isArray(b.folders) ? b.folders : []).map(parseProgressFolder).filter((f: ProgressFolder | null): f is ProgressFolder => f !== null),
+			last_scan_finished_at: str(b.last_scan_finished_at),
 		}),
 	);
 
