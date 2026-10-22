@@ -274,7 +274,7 @@ The FAST plotter becomes a **run plotter with profiles**.
 
 - **Unit tests** (vitest, `packages/fast-plotting/src/conform/*.test.ts`):
   - header normalisation (`Â°C`, annotated names, ignored derived columns)
-  - power formula and energy, as a golden test against a committed excerpt: `packages/fast-plotting/src/conform/__fixtures__/tiswarf-excerpt.csv`, 900 rows (13:38:20–13:53:19) of the 2025-03-17 TiSwarf log, with the expected kWh computed independently in Python by the same formulas and pinned in the test
+  - power formula and energy, as a golden test against a committed **synthetic** log: `packages/fast-plotting/src/conform/__fixtures__/synthetic-log.csv` (900 rows at 1 Hz, steps at 3/4/5 rpm with sub-60 s blips, a flat Tooling 2), made by `make_synthetic_log.py`, with the expected values in `synthetic-log.expected.json` computed independently in Python by the same formulas. Real lab data is not committed; the comparison with the real TiSwarf log and the maintainer's spreadsheet is backlog item C1
   - `summariseWindow` (extruding time, means, peaks)
   - `detectSteps` on a synthetic log with 250/300/350 × 5/8/10 steps and a sub-60 s blip
   - flat-channel detection

@@ -161,7 +161,7 @@ The coordinator merges each stream into `ccr-e9d98032-16ccsn` after reviewing it
 
 **Files:**
 - Create: `packages/fast-plotting/src/conform/channels.ts`, `parse.ts`, `power.ts`, `normalise.ts`, `index.ts`, and `parse.test.ts`, `power.test.ts`, `normalise.test.ts`
-- Fixture (already committed): `packages/fast-plotting/src/conform/__fixtures__/tiswarf-excerpt.csv` (900 rows, 2025-03-17 13:38:20–13:53:19 UTC)
+- Fixture (since review round 1: `synthetic-log.csv`; originally a real-log excerpt, now removed) (900 rows)
 - Modify: `packages/fast-plotting/src/index.ts` (`export * from './conform'`)
 
 **Interfaces:**
@@ -441,8 +441,8 @@ Two Opus reviews (front end and migrations) were run on the merged branch. The m
 
 | Stream | Agent profile | State |
 |---|---|---|
-| F1 — schema, guard hook, PDF | `d1-server-implementer` | in progress |
-| F2 — browser code, panels, fixture swap | `directus-ui-implementer` | in progress |
+| F1 — schema, guard hook, PDF | `d1-server-implementer` | **merged** (phase1 2055/0, roundtrip 217, extensions 1114, d1-report 32) |
+| F2 — browser code, panels, fixture swap | `directus-ui-implementer` | **merged** (fast-plotting 222, d1-ui 2153, starbase-pages 3259, starbase-web 214) |
 
 ### Contract shared by F1 and F2 (exact names)
 
