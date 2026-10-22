@@ -2,8 +2,8 @@
 import { computed, nextTick, watch } from 'vue';
 import type { DraftItem } from '@d1/ui';
 import { KINDS, kindVar } from '../nodes/kinds';
-import { cardFieldsFor, cardSegments, flaggedFields, readonlyOnCard } from './cardFields';
-import { collectionOf, doneRequiredFields } from './checks';
+import { cardFieldNames, cardSegments, flaggedFields, readonlyOnCard } from './cardFields';
+import { collectionOf } from './checks';
 import DraftItemForm from './DraftItemForm.vue';
 import { inheritedValues } from './inherit';
 import { withCategory } from './railForm';
@@ -23,13 +23,14 @@ const rail = useEditRail();
 const collection = computed(() => collectionOf(props.item));
 const defs = computed(() => edit?.catalog.rawFields.value[collection.value] ?? []);
 const inherited = computed(() => (props.item.kind === 'sample' && edit ? inheritedValues(edit.body.value, props.item.key, edit.catalog.ctx()).values : undefined));
-const requiredForDone = computed(() => (edit ? doneRequiredFields(props.item, edit.body.value, edit.catalog.ctx().fields?.[collection.value]).map((d) => d.field) : []));
-const fields = computed(() => (edit ? cardFieldsFor(props.item, edit.body.value, { requiredForDone: requiredForDone.value }) : []));
+/** Nothing until the form's field definitions have been read (the card would show an empty box). */
+const fields = computed(() => (edit ? cardFieldNames(props.item, edit.body.value, { form: defs.value, required: edit.catalog.ctx().fields?.[collection.value] }) : []));
 const segments = computed(() => cardSegments(fields.value));
-const flagged = computed(() => (edit ? flaggedFields(edit.checks.value, props.item.key) : []));
+const flagged = computed(() => (edit ? flaggedFields(edit.checks.value, props.item.key, edit.body.value) : []));
 const readonlyFields = computed(() => (edit ? readonlyOnCard(props.item, edit.body.value) : []));
-/** Nothing is drawn until the form's field definitions have been read (the card would show an empty box). */
-const ready = computed(() => !!edit && defs.value.length > 0 && fields.value.length > 0);
+const ready = computed(() => fields.value.length > 0);
+/** What every form on the card is given; each segment adds only its own fields. */
+const shared = computed(() => ({ item: props.item, fieldDefs: defs.value, inherited: inherited.value, compact: true, flagged: flagged.value, readonlyFields: readonlyFields.value }));
 
 const slotStyle = (slot: NonNullable<ReturnType<typeof cardSegments>[number]['slot']>) => ({ '--k': kindVar(KINDS[slot]) });
 
@@ -58,9 +59,9 @@ async function openPanel(): Promise<void> {
 		<template v-for="(seg, i) in segments" :key="i">
 			<div v-if="seg.slot" class="slotrow" :style="slotStyle(seg.slot)">
 				<span class="si k-ink k-tint"><v-icon :name="KINDS[seg.slot].icon" x-small /></span>
-				<DraftItemForm :item="item" :field-defs="defs" :inherited="inherited" compact :key-fields="seg.fields" :flagged="flagged" :readonly-fields="readonlyFields" :id-scope="`card${i}`" @update="update" />
+				<DraftItemForm v-bind="shared" :key-fields="seg.fields" :id-scope="`card${i}`" @update="update" />
 			</div>
-			<DraftItemForm v-else :item="item" :field-defs="defs" :inherited="inherited" compact :key-fields="seg.fields" :flagged="flagged" :readonly-fields="readonlyFields" :id-scope="`card${i}`" @update="update" />
+			<DraftItemForm v-else v-bind="shared" :key-fields="seg.fields" :id-scope="`card${i}`" @update="update" />
 		</template>
 		<button type="button" class="all" @click.stop="openPanel">All fields in the side panel</button>
 	</div>

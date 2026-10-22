@@ -17,8 +17,8 @@ import { nodeOfSocket } from '../model/sockets';
 import type { MapNode } from '../model/types';
 import type { CanvasEdit, useMapCanvas } from '../useMapCanvas';
 import type { useProcessMap } from '../useProcessMap';
-import { cardItemOf } from './cardFields';
-import { SERVER_ONLY_CODES } from './checks';
+import { cardFieldNames, cardItemOf, isMadeByCheck } from './cardFields';
+import { collectionOf, SERVER_ONLY_CODES } from './checks';
 import type { MenuTarget } from './menuTarget';
 import { onEmptyCanvas, socketSpots } from './canvasHits';
 import type { DraftAction } from './draft';
@@ -270,7 +270,8 @@ export function useEditCanvas(o: {
 	function badge(node: MapNode): { count: number; text: string; level: 'fill' | 'refused' } | null {
 		const keys = draftKeysOfNode(edit.body.value, node);
 		if (!keys.length) return null;
-		const mine = edit.checks.value.filter((c) => keys.includes(c.key));
+		// "Made by" on a sample an operation makes is not the card's to fill: the operation's kind says it (§5a).
+		const mine = edit.checks.value.filter((c) => keys.includes(c.key) && !isMadeByCheck(c, edit.body.value));
 		const refused = mine.filter((c) => !!c.code && SERVER_ONLY_CODES.has(c.code));
 		const [list, level] = refused.length ? ([refused, 'refused'] as const) : ([mine, 'fill'] as const);
 		return list.length ? { count: list.length, text: list.map((c) => c.text).join(' '), level } : null;
@@ -298,6 +299,13 @@ export function useEditCanvas(o: {
 
 	/** The draft item whose required fields and key settings are typed on this card (K4); nothing in view mode. */
 	const fieldsOf = (node: MapNode): DraftItem | null => (edit.editing.value ? cardItemOf(edit.body.value, node) : null);
+	/** The fields the card draws (none until the form's field definitions are read): its "ready" chip and its Inside tray go by them. */
+	function fieldNames(node: MapNode): string[] {
+		const item = fieldsOf(node);
+		if (!item) return [];
+		const collection = collectionOf(item);
+		return cardFieldNames(item, edit.body.value, { form: edit.catalog.rawFields.value[collection] ?? [], required: edit.catalog.ctx().fields?.[collection] });
+	}
 	/**
 	 * The card grew (its fields appeared, or its kind changed them): measure it, then make room round it; cards the person dragged stay where they
 	 * are. A saved draft with several new cards mounts them together: they are measured in one go and the room is made once.
@@ -314,7 +322,7 @@ export function useEditCanvas(o: {
 		grown.add(id);
 	}
 
-	const mapEdit: Omit<MapEdit, MapEditRemoval> = { editing: edit.editing, drop, socketDown, socketKey, socketClick, badge, wiredSockets, kind, fieldsOf, grew };
+	const mapEdit: Omit<MapEdit, MapEditRemoval> = { editing: edit.editing, drop, socketDown, socketKey, socketClick, badge, wiredSockets, kind, fieldsOf, fieldNames, grew };
 
 	if (getCurrentInstance()) {
 		onBeforeUnmount(() => {

@@ -4,7 +4,7 @@
 import type { Check, DraftBody, DraftItem, DraftKey } from '@d1/ui';
 import { MAX_SETTINGS } from '../model/formSlots';
 import type { MapNode } from '../model/types';
-import { checksFor, SERVER_ONLY_CODES } from './checks';
+import { checksFor, doneRequiredFields, SERVER_ONLY_CODES, type FieldDef } from './checks';
 import { itemOf } from './draft';
 import { keySettingsFor } from './draftForm';
 import { makerOf } from './inherit';
@@ -33,10 +33,31 @@ export function cardFieldsFor(item: DraftItem, _body: DraftBody, ctx: { required
 	return [...new Set(fields)];
 }
 
-/** The fields of the card's checks that the person can fill in: what only the server can tell (a record gone, a permission) names no field of the card. */
-export function flaggedFields(checks: Check[], key: DraftKey): string[] {
+/**
+ * The fields the card draws, or none while there is nothing to draw them from (the form's field definitions are not read yet): the one
+ * answer the card's fields, its "ready" chip and its Inside tray all go by. `required` is the check definitions of the item's collection.
+ */
+export function cardFieldNames(item: DraftItem, body: DraftBody, defs: { form: readonly unknown[]; required?: readonly FieldDef[] }): string[] {
+	if (!defs.form.length) return [];
+	return cardFieldsFor(item, body, { requiredForDone: doneRequiredFields(item, body, defs.required).map((d) => d.field) });
+}
+
+/**
+ * The "Made by" check of a new sample that a draft operation makes: it is typed nowhere on the card (it comes from the operation's kind,
+ * §5a), so the card neither flags it nor counts it; the operation's own "choose the kind" says it. Create still refuses without it.
+ */
+export function isMadeByCheck(c: Check, body: DraftBody): boolean {
+	const item = c.field === 'primary_method_id' ? itemOf(body, c.key) : undefined;
+	return item?.kind === 'sample' && !item.existing && makerOf(body, item.key) !== null;
+}
+
+/**
+ * The fields of the card's checks that the person can fill in: what only the server can tell (a record gone, a permission) names no field
+ * of the card. With the `body`, "Made by" on a sample something makes is left out too (see `isMadeByCheck`).
+ */
+export function flaggedFields(checks: Check[], key: DraftKey, body?: DraftBody): string[] {
 	const fields = checksFor(checks, key)
-		.filter((c) => !(c.code && SERVER_ONLY_CODES.has(c.code)))
+		.filter((c) => !(c.code && SERVER_ONLY_CODES.has(c.code)) && !(body && isMadeByCheck(c, body)))
 		.flatMap((c) => (c.field ? [c.field] : []));
 	return [...new Set(fields)];
 }

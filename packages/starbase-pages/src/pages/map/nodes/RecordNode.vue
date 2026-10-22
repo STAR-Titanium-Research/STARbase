@@ -50,8 +50,8 @@ const freeOutProps = computed(() => (edit && outRef.value ? editSocketProps(edit
 const badge = computed(() => (edit?.editing.value ? edit.badge(props.data) : null));
 /** A new sample types its name, material, geometry and method on the card (K6). */
 const cardItem = computed(() => (edit?.editing.value && props.data.draft ? (edit.fieldsOf?.(props.data) ?? null) : null));
-/** Nothing is missing on a card that draws its fields: it says so (K8). */
-const ready = computed(() => !badge.value && !!cardItem.value);
+/** Nothing is missing on a card that draws its fields (not before the form's definitions are read): it says so (K8). */
+const ready = computed(() => !badge.value && !!cardItem.value && (edit?.fieldNames?.(props.data).length ?? 0) > 0);
 /** Why the selected card cannot be removed (a done record), shown with a lock: "Done records can't be removed from the map". */
 const lock = computed(() => (selected.value && edit?.editing.value ? edit.lockOf(props.data) : null));
 const freeInProps = computed(() => (edit && inRef.value ? editSocketProps(edit, inRef.value) : {}));

@@ -73,6 +73,8 @@ export interface MapEdit {
 	badge(node: MapNode): { count: number; text: string; level: 'fill' | 'refused' } | null;
 	/** The draft item whose fields are typed on this card (K4): a new sample, or a new operation or test with its kind chosen; null on any other card. */
 	fieldsOf?(node: MapNode): DraftItem | null;
+	/** The names of the fields the card draws: none until the form's definitions are read, or on a card that draws none. */
+	fieldNames?(node: MapNode): string[];
 	/** The card drew its fields, or they changed: it is measured again and room is made round it, every card staying where it is (R6). */
 	grew?(nodeId: string): void;
 	/** The sockets of the card that have a wire. A card draws one socket per wire and a free one beside them while it is selected (R5). */

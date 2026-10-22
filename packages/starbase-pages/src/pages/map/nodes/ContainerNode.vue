@@ -81,8 +81,10 @@ const what = computed(() => props.data.code || props.data.title);
 const badge = computed(() => (edit?.editing.value ? edit.badge(props.data) : null));
 /** A new operation or test whose kind is chosen types its machine, date and key settings on the card (K4); with them the Inside tray and the settings list would only say them again. */
 const cardItem = computed(() => (editable.value ? (edit?.fieldsOf?.(props.data) ?? null) : null));
+/** The fields the card draws: none until the form's definitions are read, when the card has nothing to say "ready" over. */
+const onCard = computed(() => (cardItem.value ? (edit?.fieldNames?.(props.data) ?? []) : []));
 /** Nothing is missing on a card that draws its fields: it says so (K8). */
-const ready = computed(() => !badge.value && !!cardItem.value);
+const ready = computed(() => !badge.value && onCard.value.length > 0);
 /** Why the selected card cannot be removed (a done record), shown with a lock: "Done records can't be removed from the map". */
 const lock = computed(() => (selected.value && edit?.editing.value ? edit.lockOf(props.data) : null));
 /** Planned or done at Create (R9): a new operation or test wears a chip that says which, and flips it. */
@@ -123,8 +125,10 @@ const summary = computed(() => {
 const railToggle = computed(() => (hidden.value.length ? `+${hidden.value.length} more` : canFold.value ? 'fold' : null));
 
 const collapsedIn = computed(() => (props.data.collapsed ? (props.data.rows[0]?.in ?? null) : null));
-const majors = computed(() => props.data.slots.filter((s) => s.major));
-const minors = computed(() => props.data.slots.filter((s) => !s.major));
+/** What the Inside tray shows: every relation, but the ones the card types itself (the machine), which it would only repeat. */
+const traySlots = computed(() => props.data.slots.filter((s) => !onCard.value.includes(s.field)));
+const majors = computed(() => traySlots.value.filter((s) => s.major));
+const minors = computed(() => traySlots.value.filter((s) => !s.major));
 const moreShown = computed(() => moreOpen.value.has(props.id));
 const moreText = computed(() => (moreShown.value ? 'Show fewer' : `+${minors.value.length} more from the form`));
 
@@ -234,7 +238,7 @@ const outPos = computed(() => handlePosition(direction.value, 'out'));
 
 		<CardFields v-if="cardItem" :item="cardItem" @grew="edit?.grew?.(id)" />
 
-		<div v-if="data.slots.length && !data.collapsed && !cardItem" class="slots" @click.stop>
+		<div v-if="traySlots.length && !data.collapsed" class="slots" @click.stop>
 			<SlotRow v-for="s in majors" :key="s.field" :item="s" />
 			<template v-if="moreShown">
 				<SlotRow v-for="s in minors" :key="s.field" :item="s" />
@@ -244,7 +248,7 @@ const outPos = computed(() => handlePosition(direction.value, 'out'));
 			</div>
 		</div>
 
-		<dl v-if="data.settings.length && !data.collapsed && !cardItem" class="params">
+		<dl v-if="data.settings.length && !data.collapsed && !onCard.length" class="params">
 			<div v-for="s in data.settings" :key="s.label">
 				<dt>{{ s.label }}</dt>
 				<dd>{{ s.value }}</dd>

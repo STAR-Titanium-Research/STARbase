@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Check, DraftBody, DraftItem } from '@d1/ui';
 import { KEY_SETTING_FIELDS, MAX_SETTINGS } from '../model/formSlots';
 import type { MapNode } from '../model/types';
-import { cardFieldsFor, cardItemOf, cardSegments, flaggedFields, readonlyOnCard } from './cardFields';
+import { cardFieldNames, cardFieldsFor, cardItemOf, cardSegments, flaggedFields, isMadeByCheck, readonlyOnCard } from './cardFields';
 import { checks } from './checks';
 import { apply, emptyBody, type DraftAction } from './draft';
 import { keySettingsFor } from './draftForm';
@@ -134,5 +134,32 @@ describe('cardItemOf: which card types its fields', () => {
 		expect(cardItemOf(b, sampleNode('s1'))).toBeNull();
 		expect(cardItemOf(b, container('recorded'))).toBeNull();
 		expect(cardItemOf(b, node({ id: 'm:1', type: 'record', kind: 'material', ref: { collection: 'materials', id: '1', code: 'Ti' }, ins: [], outs: [] }))).toBeNull();
+	});
+});
+
+describe('"Made by" on a sample a draft operation makes is not the card to fill (§5a)', () => {
+	// n1 a sample, n2 an operation with no kind chosen (row n3), n4 the sample it makes
+	const made = run([{ type: 'addSample' }, { type: 'addContainer', kind: 'operation', source: { from: 'blank' }, from: { key: 'n1' } }, { type: 'addSample', from: { key: 'n2', row: 0 } }]);
+	const all = checks(made, {});
+
+	it('the real checks do refuse the sample without a method (Create is unchanged)', () => {
+		expect(all.some((c) => c.key === 'n4' && c.field === 'primary_method_id')).toBe(true);
+		expect(all.some((c) => c.key === 'n2' && c.field === 'method_id')).toBe(true);
+	});
+
+	it('is not flagged on the sample the operation makes, and still is on the one nothing makes', () => {
+		expect(flaggedFields(all, 'n4', made)).not.toContain('primary_method_id');
+		expect(flaggedFields(all, 'n4', made)).toContain('material_id');
+		expect(flaggedFields(all, 'n1', made)).toContain('primary_method_id');
+		expect(isMadeByCheck(all.find((c) => c.key === 'n4' && c.field === 'primary_method_id')!, made)).toBe(true);
+		expect(isMadeByCheck(all.find((c) => c.key === 'n1' && c.field === 'primary_method_id')!, made)).toBe(false);
+	});
+});
+
+describe('cardFieldNames', () => {
+	it('is empty until the field definitions of the form are read, then the fields of the card', () => {
+		const item = op({ process_category: 'machining' });
+		expect(cardFieldNames(item, body, { form: [] })).toEqual([]);
+		expect(cardFieldNames(item, body, { form: [{ field: 'x' }] })).toEqual(cardFieldsFor(item, body, {}));
 	});
 });

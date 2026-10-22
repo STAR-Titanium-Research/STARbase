@@ -184,10 +184,13 @@ describe('a sample card in edit mode', () => {
 	it('says "ready" in green on a new sample whose fields are drawn and nothing is missing, and nothing on one with no fields', async () => {
 		const [s] = samples(run([{ type: 'addSample' }]));
 		const item = run([{ type: 'addSample' }]).items[0];
-		expect(await render(RecordNode, { id: s.id, data: s }, edit({ fieldsOf: () => item }))).toMatch(/class="chk ready"[^>]*>ready</);
+		const drawn = { fieldsOf: () => item, fieldNames: () => ['nickname', 'material_id'] };
+		expect(await render(RecordNode, { id: s.id, data: s }, edit(drawn))).toMatch(/class="chk ready"[^>]*>ready</);
 		expect(await render(RecordNode, { id: s.id, data: s }, edit())).not.toContain('class="chk');
+		// the form's definitions are not read yet: the card is empty, so it does not say "ready" over it
+		expect(await render(RecordNode, { id: s.id, data: s }, edit({ fieldsOf: () => item, fieldNames: () => [] }))).not.toContain('ready');
 		// something is missing: the count, not "ready"
-		const missing = await render(RecordNode, { id: s.id, data: s }, edit({ fieldsOf: () => item, badge: () => ({ count: 1, text: 'x', level: 'fill' as const }) }));
+		const missing = await render(RecordNode, { id: s.id, data: s }, edit({ ...drawn, badge: () => ({ count: 1, text: 'x', level: 'fill' as const }) }));
 		expect(missing).not.toContain('ready');
 	});
 
@@ -293,22 +296,40 @@ describe('a container in edit mode', () => {
 	it('says "ready" on a new operation with its fields drawn and nothing missing', async () => {
 		const body = run([{ type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'm' } }]);
 		const [c] = containers(body);
-		expect(await render(ContainerNode, { id: c.id, data: c }, edit({ fieldsOf: () => body.items[0] }))).toMatch(/class="chk ready"[^>]*>ready</);
+		expect(await render(ContainerNode, { id: c.id, data: c }, edit({ fieldsOf: () => body.items[0], fieldNames: () => ['equipment_id'] }))).toMatch(/class="chk ready"[^>]*>ready</);
 		expect(await render(ContainerNode, { id: c.id, data: c }, edit())).not.toContain('ready');
+		// the form's definitions are not read yet: nothing is drawn on the card, so it is not "ready"
+		expect(await render(ContainerNode, { id: c.id, data: c }, edit({ fieldsOf: () => body.items[0], fieldNames: () => [] }))).not.toContain('ready');
 	});
 
-	it('draws the fields typed on the card in place of the Inside tray and the settings list, which would only say them again', async () => {
+	it('draws the fields typed on the card, and leaves out of the Inside tray and the settings list only what they would repeat', async () => {
 		const body = run([{ type: 'addContainer', kind: 'operation', source: { from: 'blank', methodId: 'm' } }]);
 		const [c] = containers(body);
 		const item = { ...body.items[0], values: { ...body.items[0].values, process_category: 'machining' } } as DraftItem;
-		const full: ContainerData = { ...c, slots: [{ field: 'equipment_id', role: 'Machine', ref: { collection: 'equipment', id: 'e', code: 'M1' }, major: true }], settings: [{ label: 'Feed', value: '0.2 mm/rev' }] };
-		const withFields = await render(ContainerNode, { id: c.id, data: full }, edit({ fieldsOf: () => item }), fakeEditMode(run([]), item));
+		const ref = (collection: string, code: string) => ({ collection, id: code, code });
+		const full: ContainerData = {
+			...c,
+			slots: [
+				{ field: 'equipment_id', role: 'Machine', ref: ref('equipment', 'M1'), major: true },
+				{ field: 'tool_id', role: 'Tool', ref: ref('tools', 'T1'), major: true },
+				{ field: 'operator_person_id', role: 'Operator', ref: ref('people', 'Ada'), major: false },
+			],
+			settings: [{ label: 'Feed', value: '0.2 mm/rev' }],
+		};
+		const typed = edit({ fieldsOf: () => item, fieldNames: () => ['equipment_id', 'planned_date'] });
+		const withFields = await render(ContainerNode, { id: c.id, data: full }, typed, fakeEditMode(run([]), item));
 		expect(withFields).toContain('class="card-fields nodrag nopan nowheel"');
-		expect(withFields).not.toContain('class="slots"');
+		// the machine is typed on the card; what was set only in the side panel (a tool, an operator) is still drawn
+		const tray = withFields.slice(withFields.indexOf('class="slots"'));
+		expect(tray).toContain('Tool');
+		expect(tray).not.toContain('Machine');
+		expect(withFields).toContain('+1 more from the form');
 		expect(withFields).not.toContain('class="params"');
 		const without = await render(ContainerNode, { id: c.id, data: full }, edit());
-		expect(without).toContain('class="slots"');
+		expect(without).toContain('Machine');
 		expect(without).toContain('class="params"');
+		// the definitions are not read yet: the tray is whole until the fields are there
+		expect(await render(ContainerNode, { id: c.id, data: full }, edit({ fieldsOf: () => item, fieldNames: () => [] }))).toContain('Machine');
 	});
 
 	it('wears the Planned / Done chip of a new operation (R9), and none without edit mode or when the page offers none', async () => {

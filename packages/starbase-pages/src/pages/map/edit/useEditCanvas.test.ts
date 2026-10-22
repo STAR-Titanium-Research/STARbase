@@ -344,6 +344,18 @@ describe('badges and ＋ output', () => {
 		expect(ec.mapEdit.badge(op)).toMatchObject({ level: 'fill' });
 	});
 
+	it('does not count "Made by" on a sample a kind-less draft operation makes, and still counts it on a sample nothing makes (§5a)', async () => {
+		const body = run([{ type: 'addSample' }, { type: 'addContainer', kind: 'operation', source: { from: 'blank' }, from: { key: 'n1' } }, { type: 'addSample', from: { key: 'n2', row: 0 } }]);
+		const { ec } = await setup(body);
+		const sampleNode = (id: string) => ({ id: `s:${id}`, type: 'record', kind: 'sample', ref: { collection: 'physical_samples', id, code: 'New sample' }, ins: [], outs: [], draft: true }) as MapNode;
+		const made = ec.mapEdit.badge(sampleNode('draft:n4'))!;
+		const free = ec.mapEdit.badge(sampleNode('draft:n1'))!;
+		expect(made.text).not.toMatch(/method/i);
+		expect(made.text).toMatch(/material/i);
+		expect(free.text).toMatch(/method/i);
+		expect(free.count).toBe(made.count + 1);
+	});
+
 	it('a card that has only a warning of its own (a sample whose record changed since it was added) is "fill"', async () => {
 		const body = run([{ type: 'addExistingSamples', samples: [{ id: 's1', version: 1 }] }]);
 		const { ec } = await setup(body);
@@ -356,6 +368,7 @@ describe('badges and ＋ output', () => {
 		const { ec, edit } = await setup(body);
 		const sampleNode = { id: 's:draft:n1', type: 'record', kind: 'sample', ref: { collection: 'physical_samples', id: 'draft:n1', code: 'New sample' }, ins: [], outs: [], draft: true } as MapNode;
 		expect(ec.mapEdit.fieldsOf?.(sampleNode)?.key).toBe('n1');
+		expect(ec.mapEdit.fieldNames?.(sampleNode)).toEqual([]); // the field definitions of the form are not read in this setup
 		expect(ec.mapEdit.fieldsOf?.(container('draft:n3'))).toBeNull(); // no kind chosen yet: the header and the dropdown only
 		expect(ec.mapEdit.fieldsOf?.(container('draft:n5'))?.key).toBe('n4');
 		expect(ec.mapEdit.fieldsOf?.(container('recorded'))).toBeNull();
