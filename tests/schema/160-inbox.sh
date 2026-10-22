@@ -979,6 +979,37 @@ CREATE TEMP TABLE ib_bs_p AS EXECUTE list_linked('f', '$IB_P', '', '$IB_P', 'man
 SELECT 'ib_batch_person:' || link_batch_size FROM ib_bs_p WHERE rel_path = 'Users/ibx1/s1.tif';
 CREATE TEMP TABLE ib_bs_a AS EXECUTE list_linked('t', '$IB_P', '', '$IB_P', 'manual', 200, 0);
 SELECT 'ib_batch_admin:' || link_batch_size FROM ib_bs_a WHERE rel_path = 'Users/ibx1/s1.tif';
+-- Scan progress (GET /progress): one owner, IB_R, with its own folders and files. Folders: the root (listed), a sub folder (listed), one not listed yet, and an ignored
+-- folder with a folder below it (both not listed: the rule leaves them out, or 100% would never be reached). Files: a SEM image read with a pixel size and a picture, a SEM
+-- image not read yet, an image read whose picture failed (a marker row counts: it was tried), a document, a file that is gone, and an image under the ignored folder.
+INSERT INTO people (person_id, full_name) VALUES ('a1b00000-0000-4000-8000-0000000000f1', 'Inbox Progress Person');
+UPDATE people SET uni_alias = 'ibr1' WHERE person_id = 'a1b00000-0000-4000-8000-0000000000f1';
+INSERT INTO d1_private.inbox_dirs (rel_path, owner_person_id, last_listed_at) VALUES
+  ('Users/ibr1', 'a1b00000-0000-4000-8000-0000000000f1', now()), ('Users/ibr1/sem', 'a1b00000-0000-4000-8000-0000000000f1', now()), ('Users/ibr1/new', 'a1b00000-0000-4000-8000-0000000000f1', NULL),
+  ('Users/ibr1/Prog Skip', 'a1b00000-0000-4000-8000-0000000000f1', NULL), ('users/ibr1/prog skip/below', 'a1b00000-0000-4000-8000-0000000000f1', NULL), ('Users/ibr1/Prog Skip 2', 'a1b00000-0000-4000-8000-0000000000f1', NULL);
+INSERT INTO d1_private.inbox_ignored_dirs (owner_person_id, rel_folder) VALUES ('a1b00000-0000-4000-8000-0000000000f1', 'Prog Skip');
+INSERT INTO directus_files (id) SELECT ('a1b00000-0000-4000-8000-0000000004' || lpad(g::text, 2, '0'))::uuid FROM generate_series(1, 6) g;
+INSERT INTO d1_private.file_candidates (directus_files_id, owner_person_id, kind, origin, state, match_strength, matches, rel_path, classified_by, extracted)
+SELECT ('a1b00000-0000-4000-8000-0000000004' || lpad(n::text, 2, '0'))::uuid, 'a1b00000-0000-4000-8000-0000000000f1', kind, 'new', st, 'none', '[]'::jsonb, path, read_by, ex::jsonb
+  FROM (VALUES (1, 'sem_image', 'new',  'Users/ibr1/sem/a.tif',    'sem-2', '{"pixel_size_nm": 2.5}'),
+               (2, 'sem_image', 'new',  'Users/ibr1/sem/b.tif',    NULL,    '{}'),
+               (3, 'image',     'new',  'Users/ibr1/c.png',        'img-1', '{}'),
+               (4, 'document',  'new',  'Users/ibr1/d.pdf',        NULL,    '{}'),
+               (5, 'sem_image', 'gone', 'Users/ibr1/sem/e.tif',    'sem-2', '{"pixel_size_nm": 1}'),
+               (6, 'image',     'new',  'Users/ibr1/Prog Skip/f.png', NULL,  '{}')) v(n, kind, st, path, read_by, ex);
+INSERT INTO d1_private.file_thumbnails (candidate_id, thumb, preview, source_size, source_mtime)
+SELECT candidate_id, '\xffd8ffe0'::bytea, '\xffd8ffe0'::bytea, 1, now() FROM d1_private.file_candidates WHERE rel_path = 'Users/ibr1/sem/a.tif';
+INSERT INTO d1_private.file_thumbnails (candidate_id, source_size, source_mtime, failed_reason)
+SELECT candidate_id, 1, now(), 'could not be decoded' FROM d1_private.file_candidates WHERE rel_path = 'Users/ibr1/c.png';
+CREATE TEMP TABLE ib_pd AS EXECUTE progressdirs('a1b00000-0000-4000-8000-0000000000f1', '');
+SELECT 'ib_progress_dirs:' || folders_known || ':' || folders_listed FROM ib_pd;
+CREATE TEMP TABLE ib_pf AS EXECUTE progressfiles('a1b00000-0000-4000-8000-0000000000f1', '');
+SELECT 'ib_progress_files:' || files || ':' || images || ':' || images_read || ':' || images_with_thumb || ':' || sem || ':' || sem_with_scale FROM ib_pf;
+SELECT 'ib_progress_other_owner:' || (SELECT count(*) FROM ib_pd WHERE owner_person_id <> 'a1b00000-0000-4000-8000-0000000000f1') || ':' || (SELECT count(*) FROM ib_pf WHERE owner_person_id <> 'a1b00000-0000-4000-8000-0000000000f1');
+CREATE TEMP TABLE ib_po AS EXECUTE progressowners;
+SELECT 'ib_progress_owners:' || (SELECT count(*) FROM ib_po WHERE owner_id = 'a1b00000-0000-4000-8000-0000000000f1' AND kind = 'person' AND folder = 'ibr1' AND NOT has_login) || ':' || (SELECT count(*) FROM ib_po WHERE kind = 'team' AND folder = 'Ibx Team');
+CREATE TEMP TABLE ib_ps AS EXECUTE progressscan;
+SELECT 'ib_progress_scan:' || count(*) FROM ib_ps;
 ROLLBACK;
 SQL
 )
@@ -1057,6 +1088,11 @@ SQL
     expect_fixed ib_out "ib_ign_reset_wrong_owner_kept:true" "another owner's reset of the same path changes nothing: the row keeps its times"
     expect_fixed ib_out "ib_ign_deleted:1" "a rule is deleted by id"
     expect_fixed ib_out "ib_ign_rules_left:0" "...and none is left"
+    expect_fixed ib_out "ib_progress_dirs:4:2" "scan progress: the folders the crawler has seen (the root, sem, new, and Prog Skip 2) and listed (two), without the ignored folder and the one below it (any letter case; a sibling that shares the prefix stays)"
+    expect_fixed ib_out "ib_progress_files:4:3:2:2:2:1" "scan progress: files without the gone one and the one under the ignored folder; images read, images with a picture row (a failure marker counts), SEM images and those with a pixel size"
+    expect_fixed ib_out "ib_progress_other_owner:0:0" "scan progress: only the owners asked for"
+    expect_fixed ib_out "ib_progress_owners:1:1" "scan progress: the owner list has a person with an alias but no login, and a team with a share folder"
+    expect_fixed ib_out "ib_progress_scan:1" "scan progress: the crawler state's one row"
 else
     echo "  skip: node is not installed here, so the d1-inbox SQL is not run (CI has node)"
 fi

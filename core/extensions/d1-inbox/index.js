@@ -137,6 +137,17 @@
 //                                   it manual (a re-read never overwrites it). 403 FORBIDDEN for everyone else, an administrator who is not the owner and an
 //                                   unowned file too; 400 INVALID_PAYLOAD (extensions.field 'field' or 'value') for an unknown field (read_by, sources, ...) or a
 //                                   value the function refuses; 404 when no settings are saved. Answers like the GET.
+//   GET  /d1-inbox/progress[?all=1] -> { data: { folders: [{ owner: { kind: 'person' | 'team', id, name, folder, root, has_login (person) | null (team) },
+//                                   folders_known, folders_listed, files, images, images_read, images_with_thumb, sem, sem_with_scale }],
+//                                   last_scan_finished_at } }   SCAN PROGRESS per folder; the percentages are computed by the client (null when a denominator is 0).
+//                                   The caller's own folders: their person folder (when they have a uni alias) and the share folder of each team they are an ACTIVE
+//                                   member of. ?all=1 (administrators only, 403 FORBIDDEN otherwise) is every folder that has an alias or a share folder, people
+//                                   without a login included (has_login false), largest first. Per owner: folders_known = rows of d1_private.inbox_dirs (the
+//                                   folders the crawler has SEEN so far: it cannot count the ones it has not met), folders_listed = those with last_listed_at set;
+//                                   files = candidates not 'gone'; images = kind image or sem_image, images_read = those with classified_by set, images_with_thumb =
+//                                   those with a file_thumbnails row (a failure marker counts: it was tried); sem = kind sem_image, sem_with_scale = those whose
+//                                   extracted has pixel_size_nm. Folders and files under an ignored-folder rule of the owner are left out (the crawler never lists
+//                                   them), so 100% is reachable. root = INBOX_PERSON_DIR/<alias> or Shared/<share folder>. Read only.
 //   GET  /d1-inbox/admin            administrators only -> { data: { status: {...}, errors: [{at, message}], unmatched_folders: [...],
 //                                   people_without_alias: [{person_id, full_name, active, has_login}], queued_requests, queue, candidates } }
 //   POST /d1-inbox/admin/scan-all   administrators only -> 202 { data: { queued: true, ... } }; 409 ALREADY_QUEUED while one waits
@@ -323,14 +334,19 @@ const NOT_ON_RECORD = Object.entries(LINK_TARGETS)
 // case. The owner-person and owner-team tests are two separate NOT EXISTS (each an equality on its own column) so the planner can use the partial indexes
 // idx_inbox_ignored_dirs_owner_person and _owner_team; a file owned by a team has a NULL person id and the person subquery then finds nothing, and the reverse.
 // Only the undecided tabs and the summary use it: a LINKED row under a rule is still listed in the Linked tab, a dismissed one in Dismissed.
-const IGNORED_PREFIX = "lower(split_part(c.rel_path, '/', 1) || '/' || split_part(c.rel_path, '/', 2) || '/' || ig.rel_folder)";
-// The first condition is an equality on the first folder below the root (part 3 of the file's path, part 1 of the rule), which every covered file satisfies: it is
-// only there so Postgres can HASH-join files and rules (owner and first part) instead of testing every file against every rule of its owner, which measured at
-// seconds for 30 000 open files and 150 rules. The left() test after it is the real, whole-parts comparison.
-const UNDER_RULE = "lower(split_part(c.rel_path, '/', 3)) = lower(split_part(ig.rel_folder, '/', 1))"
-  + ` AND left(lower(c.rel_path), length(${IGNORED_PREFIX}) + 1) = ${IGNORED_PREFIX} || '/'`;
-const NOT_UNDER_IGNORED = 'NOT EXISTS (SELECT 1 FROM d1_private.inbox_ignored_dirs ig WHERE ig.owner_person_id = c.owner_person_id'
-  + ` AND ${UNDER_RULE}) AND NOT EXISTS (SELECT 1 FROM d1_private.inbox_ignored_dirs ig WHERE ig.owner_team_id = c.owner_team_id AND ${UNDER_RULE})`;
+// notUnderIgnored(alias, path) writes the clause for any table that has an owner pair and a path: alias = the table's alias, path = the SQL expression of its
+// path (default: the candidate's own rel_path). The scan progress reads of inbox_dirs use it with the folder's path plus a '/' (the folder of a rule is under it too).
+const notUnderIgnored = (alias = 'c', path = `${alias}.rel_path`) => {
+  const prefix = `lower(split_part(${path}, '/', 1) || '/' || split_part(${path}, '/', 2) || '/' || ig.rel_folder)`;
+  // The first condition is an equality on the first folder below the root (part 3 of the file's path, part 1 of the rule), which every covered file satisfies: it is
+  // only there so Postgres can HASH-join files and rules (owner and first part) instead of testing every file against every rule of its owner, which measured at
+  // seconds for 30 000 open files and 150 rules. The left() test after it is the real, whole-parts comparison.
+  const under = `lower(split_part(${path}, '/', 3)) = lower(split_part(ig.rel_folder, '/', 1))`
+    + ` AND left(lower(${path}), length(${prefix}) + 1) = ${prefix} || '/'`;
+  return `NOT EXISTS (SELECT 1 FROM d1_private.inbox_ignored_dirs ig WHERE ig.owner_person_id = ${alias}.owner_person_id AND ${under})`
+    + ` AND NOT EXISTS (SELECT 1 FROM d1_private.inbox_ignored_dirs ig WHERE ig.owner_team_id = ${alias}.owner_team_id AND ${under})`;
+};
+const NOT_UNDER_IGNORED = notUnderIgnored();
 
 // A surface scan file that was already added (through the Alicona feature's own dialog, or here) is not a new thing to add: not counted, not listed as
 // undecided. Only meaningful where the surface_scans table exists (the endpoint asks first), so it is a separate fragment, never part of NOT_ON_RECORD.
@@ -469,6 +485,32 @@ export const SQL = {
   adminQueue:
     "SELECT count(*) FILTER (WHERE status = 'queued')::int AS queued, count(*) FILTER (WHERE status = 'running')::int AS running"
     + " FROM d1_private.inbox_scan_requests WHERE status IN ('queued', 'running')",
+  // Scan progress (GET /progress). Four small reads, each one kind of answer; the owner of every row is the pair (owner_person_id, owner_team_id), one NULL.
+  // The owners with a folder, for an administrator's ?all=1: everyone with a uni alias (with or without a login) and every team with a share folder.
+  progressOwners:
+    "SELECT 'person' AS kind, p.person_id AS owner_id, p.full_name AS name, p.uni_alias AS folder, (p.user_id IS NOT NULL) AS has_login FROM people p WHERE p.uni_alias IS NOT NULL"
+    + " UNION ALL SELECT 'team', t.team_id, t.name, t.share_folder, NULL FROM teams t WHERE t.share_folder IS NOT NULL ORDER BY 3, 2",
+  // The folders the crawler has seen (inbox_dirs: one row per directory it has listed or at least met) and how many of them it has listed, per owner. A folder under
+  // one of the owner's ignored-folder rules is left out: the crawler keeps a 'seen, not listed' row for it for ever, which would hold the percentage under 100.
+  // Bindings: the person ids as one csv, the team ids as one csv ('' for none).
+  progressDirs:
+    'SELECT d.owner_person_id, d.owner_team_id, count(*)::int AS folders_known, count(d.last_listed_at)::int AS folders_listed FROM d1_private.inbox_dirs d'
+    + ` WHERE (d.owner_person_id = ANY(${IDS}) OR d.owner_team_id = ANY(${IDS})) AND ${notUnderIgnored('d', "(d.rel_path || '/')")}`
+    + ' GROUP BY d.owner_person_id, d.owner_team_id',
+  // The files the crawler has registered per owner (not gone, not under an ignored folder, the file-owner predicate as everywhere) and how far each kind of read has come:
+  // images (kinds image and sem_image) read (classified_by set), with a picture row (a failure marker row counts: the crawler tried), and the SEM images that carry a pixel size.
+  // Same bindings as progressDirs.
+  progressFiles:
+    'SELECT c.owner_person_id, c.owner_team_id, count(*)::int AS files,'
+    + " count(*) FILTER (WHERE c.kind IN ('image', 'sem_image'))::int AS images,"
+    + " count(*) FILTER (WHERE c.kind IN ('image', 'sem_image') AND c.classified_by IS NOT NULL)::int AS images_read,"
+    + " count(*) FILTER (WHERE c.kind IN ('image', 'sem_image') AND EXISTS (SELECT 1 FROM d1_private.file_thumbnails th WHERE th.candidate_id = c.candidate_id))::int AS images_with_thumb,"
+    + " count(*) FILTER (WHERE c.kind = 'sem_image')::int AS sem,"
+    + " count(*) FILTER (WHERE c.kind = 'sem_image' AND c.extracted->>'pixel_size_nm' IS NOT NULL)::int AS sem_with_scale"
+    + ` FROM d1_private.file_candidates c WHERE c.state <> 'gone' AND (c.owner_person_id = ANY(${IDS}) OR c.owner_team_id = ANY(${IDS}))`
+    + ` AND ${FILE_OWNER_MATCHES} AND ${NOT_UNDER_IGNORED} GROUP BY c.owner_person_id, c.owner_team_id`,
+  // When the last full scan ended (the one row of the crawler's state).
+  progressScan: `SELECT last_scan_finished_at FROM d1_private.inbox_crawler_state WHERE id = '${CRAWLER_STATE_ID}'`,
   // Stream F1: does the surface_scans table exist yet (the Alicona chat's migration 192)? Checked once, then remembered.
   scanTableExists: "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'surface_scans') AS available",
   // A scan row by id, as undo and a repeated add read it. Never run unless scanTableExists said yes.
@@ -801,6 +843,27 @@ export function shapeSummary(rows, scope, teams, person) {
     new: all.reduce((total, c) => total + c.new, 0),
     older_matches: all.reduce((total, c) => total + c.older_matches, 0),
   };
+}
+
+// GET /progress: one entry per folder (an owner with a folder on the share), the counts of the two progress reads joined to it. owners = [{ kind, id, name, folder,
+// has_login }]; dirs and files = the grouped rows. A folder the crawler has not met yet has no row in either: its counts are 0. Largest first (files, then name).
+export function shapeProgress(owners, dirs, files, scan, root) {
+  const key = (kind, id) => `${kind}:${id}`;
+  const byOwner = (rows) => new Map(rows.map((r) => [r.owner_person_id ? key('person', r.owner_person_id) : key('team', r.owner_team_id), r]));
+  const d = byOwner(dirs);
+  const f = byOwner(files);
+  const counts = (m, k, name) => num(m.get(k)?.[name]) ?? 0;
+  const folders = owners.map((o) => {
+    const k = key(o.kind, o.id);
+    return {
+      owner: { kind: o.kind, id: o.id, name: o.name, folder: o.folder, root: root(o), has_login: o.kind === 'person' ? o.has_login === true : null },
+      folders_known: counts(d, k, 'folders_known'), folders_listed: counts(d, k, 'folders_listed'),
+      files: counts(f, k, 'files'), images: counts(f, k, 'images'), images_read: counts(f, k, 'images_read'), images_with_thumb: counts(f, k, 'images_with_thumb'),
+      sem: counts(f, k, 'sem'), sem_with_scale: counts(f, k, 'sem_with_scale'),
+    };
+  });
+  folders.sort((a, b) => b.files - a.files || String(a.owner.name).localeCompare(String(b.owner.name)));
+  return { folders, last_scan_finished_at: toIso(scan?.last_scan_finished_at) };
 }
 
 // $CURRENT_USER anywhere in a filter (ItemsService does not substitute it, the REST layer does).
@@ -1676,6 +1739,26 @@ export function mount(router, context, deps = {}) {
     const scope = await scopeOf(acc);
     const rows = scope.personId ? rowsOf(await database.raw((await scanTableAvailable()) ? SQL.summaryWithScans : SQL.summary, [scope.personId, scope.teamIds.join(',')])) : [];
     res.json({ data: shapeSummary(rows, scope, scope.teams, scope.person) });
+  }));
+
+  // GET /progress[?all=1]: how far the crawler has come in each folder of the caller (their own and their teams'); an administrator's all=1 reads every folder. The
+  // percentages are the browser's. Read only; nothing here is a write path.
+  router.get('/progress', route(async ({ req, res, acc }) => {
+    const all = toBool(req.query?.all);
+    if (all && acc.admin !== true) throw ERRORS.adminOnly();
+    const scope = await scopeOf(acc);
+    const owners = all
+      ? rowsOf(await database.raw(SQL.progressOwners, [])).map((o) => ({ kind: o.kind, id: o.owner_id, name: o.name, folder: o.folder, has_login: o.has_login }))
+      : [
+        ...(scope.personId && !isBlank(scope.person?.uni_alias) ? [{ kind: 'person', id: scope.personId, name: scope.person.full_name, folder: scope.person.uni_alias, has_login: true }] : []),
+        ...scope.teams.filter((t) => !isBlank(t.share_folder)).map((t) => ({ kind: 'team', id: t.team_id, name: t.name, folder: t.share_folder, has_login: null })),
+      ];
+    const ids = (kind) => owners.filter((o) => o.kind === kind).map((o) => o.id).join(',');
+    const bindings = [ids('person'), ids('team')];
+    const [dirs, files, [scan]] = owners.length
+      ? [rowsOf(await database.raw(SQL.progressDirs, bindings)), rowsOf(await database.raw(SQL.progressFiles, bindings)), rowsOf(await database.raw(SQL.progressScan, []))]
+      : [[], [], rowsOf(await database.raw(SQL.progressScan, []))];
+    res.json({ data: shapeProgress(owners, dirs, files, scan, (o) => (o.kind === 'person' ? `${personDir()}/${o.folder}` : `Shared/${o.folder}`)) });
   }));
 
   // -- imaging settings -------------------------------------------------------------------------------------------------------

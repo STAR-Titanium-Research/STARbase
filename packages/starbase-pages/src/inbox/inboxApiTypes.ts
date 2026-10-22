@@ -264,3 +264,39 @@ export interface InboxAdmin {
 	/** File candidates by state ({ new, linked, dismissed, gone }). */
 	candidates: Record<string, number>;
 }
+
+/** The folder an answer of GET /d1-inbox/progress is about: a person's folder on the share (Users/<alias>) or a team's (Shared/<share folder>). */
+export interface ProgressOwner {
+	kind: 'person' | 'team';
+	id: string;
+	name: string;
+	/** The uni alias or the share folder. */
+	folder: string;
+	/** The folder's path on the share, as the crawler reads it. */
+	root: string;
+	/** Whether a person has a login: false for someone the crawler scans who cannot open the Inbox. Null for a team. */
+	has_login: boolean | null;
+}
+/**
+ * The counts of one folder. The percentages are the browser's (progressModel.ts): `folders_known` is the folders the crawler has SEEN so far, not the
+ * folders that exist, so a full bar means everything it has seen.
+ */
+export interface ProgressCounts {
+	folders_known: number;
+	folders_listed: number;
+	files: number;
+	images: number;
+	images_read: number;
+	images_with_thumb: number;
+	sem: number;
+	sem_with_scale: number;
+}
+export interface ProgressFolder extends ProgressCounts {
+	owner: ProgressOwner;
+}
+/** GET /d1-inbox/progress (the caller's own folders) or ?all=1 (every folder, administrators only). */
+export interface ScanProgress {
+	folders: ProgressFolder[];
+	/** When the last full scan ended; null before the first one. */
+	last_scan_finished_at: string | null;
+}

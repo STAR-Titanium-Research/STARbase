@@ -12,12 +12,14 @@ import InboxSheet from './InboxSheet.vue';
 import InboxTabs from './InboxTabs.vue';
 import InboxViewRail from './InboxViewRail.vue';
 import LinkDialog from './LinkDialog.vue';
+import ScanProgressStrip from './ScanProgressStrip.vue';
 import type { FoundFile } from './inboxApi';
 import { NO_FOLDER_TEXT, acceptButtonText, batchTitle, groupLinked, type LinkedGroup } from './inboxBulk';
 import { DEFAULT_FILTERS, DOCUMENT_NOTICE, EMPTY_TEXT, IMAGE_KINDS, filtersToQuery, parseFilters, primaryAction, type InboxFilters as Filters } from './inboxModel';
 import type { ScanAddForm } from './inboxScan';
 import { createInbox, type Outcome } from './useInbox';
 import { createIgnoredFolders } from './useIgnoredFolders';
+import { createScanProgress } from './useScanProgress';
 import { useViewSettings } from './useViewSettings';
 import { viewBoxPath } from './viewBoxModel';
 import '../labels/form.css';
@@ -50,12 +52,19 @@ const ig = createIgnoredFolders({
 	},
 });
 
+// Scan progress (the strip under the lead): the person's own folders. Read once when the page opens; it leaves itself out when there is no folder.
+const progress = createScanProgress(host.api);
+
 onMounted(() => {
 	void inbox.load();
 	void ig.load();
+	void progress.load();
 	void summary.refresh();
 });
-onBeforeUnmount(() => inbox.cancel());
+onBeforeUnmount(() => {
+	inbox.cancel();
+	progress.cancel();
+});
 // Any filter (or the tab) changing in the URL reloads both lists; a late answer to the old filters is dropped by the page's gates.
 watch(() => JSON.stringify(filtersToQuery(filters.value)), () => void inbox.load());
 
@@ -337,6 +346,8 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKey));
 			</v-button>
 		</div>
 
+		<ScanProgressStrip v-if="progress.loaded.value && progress.folders.value.length" :folders="progress.folders.value" :updated-at="progress.lastScanFinishedAt.value" />
+
 		<InboxTabs :filters="filters" :counts="tabCount" />
 
 		<InboxFilters :filters="filters" :teams="teams" :has-own="hasOwn" @patch="patch" @clear="clearFilters" />
@@ -478,6 +489,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKey));
 			:show-owner="showOwner"
 			:busy="inbox.isBusy(selected.candidate_id)"
 			:undoing="inbox.undoing.value !== null"
+			:scale-bar="view.settings.scaleBar"
 			@close="closeSheet()"
 			@link="sheetLink(selected)"
 			@dismiss="dismissRow(selected)"
@@ -503,6 +515,8 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKey));
 		:preview="view.settings.preview"
 		:compare="view.settings.compareList"
 		:open="view.settings.railOpen"
+		:scale-bar="view.settings.scaleBar"
+		@update:scale-bar="view.set({ scaleBar: $event })"
 		@update:preview="view.set({ preview: $event })"
 		@update:compare="view.set({ compareList: $event })"
 		@update:open="view.set({ railOpen: $event })"
