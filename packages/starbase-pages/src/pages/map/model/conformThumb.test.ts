@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
-import { parseTrace, type SeriesMeta } from '@d1/fast-plotting';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { parseTrace, resetTraceCache, type SeriesMeta } from '@d1/fast-plotting';
 import type { HostApi } from '@d1/ui';
 import { conformThumb, THUMB_KEYS } from './conformThumb';
 import { conformThumbs, dataPreview, type DataPreview } from './dataPreview';
@@ -66,7 +66,7 @@ describe('conformThumb', () => {
 const op = (id: string): Ref => ({ collection: 'manufacturing_operations', id, code: `CF-${id}` });
 
 /** An api for one Conform run `c1` (window 13:05 to 13:09) on log `log-thumb`; `readable: false` hides the log (403). */
-function fakeApi({ readable = true, withWindow = true } = {}) {
+function fakeApi({ readable = true, withWindow = true, file = 200 } = {}) {
   const get = vi.fn(async (path: string, _config?: unknown) => {
     if (path === '/items/conform_run_data') {
       return { data: { data: [{ id: 'r1', operation_id: 'c1', log_id: 'log-thumb', window_start: withWindow ? at(300) : null, window_end: withWindow ? at(540) : null, status: withWindow ? 'done' : 'no_window' }] } };
@@ -75,20 +75,25 @@ function fakeApi({ readable = true, withWindow = true } = {}) {
       if (!readable) throw Object.assign(new Error('HTTP 403'), { response: { status: 403 } });
       return { data: { data: { log_id: 'log-thumb', directus_files_id: 'file-1', log_start: LOG_START, log_end: at(599), n_rows: 600, duration_s: 599, series: SERIES } } };
     }
-    if (path === '/assets/file-1') return { data: csv() };
+    if (path === '/assets/file-1') {
+      if (file !== 200) throw Object.assign(new Error(`HTTP ${file}`), { response: { status: file } });
+      return { data: csv() };
+    }
     return { data: { data: [] } };
   });
   return { api: { get } as unknown as HostApi, get };
 }
 
 describe('conformThumbs', () => {
+  beforeEach(() => resetTraceCache());   // the trace cache is shared by the whole module
   const preview = (over: Partial<DataPreview> = {}): Record<string, DataPreview> => ({ c1: { kind: 'conform', plotterPath: '/d1-conform-dashboard?operation=c1', ...over }, f1: { kind: 'fast', plotterPath: '/x' } });
 
   it('reads the window trace of each Conform run, and only of those', async () => {
     const { api, get } = fakeApi();
     const out = await conformThumbs(api, preview());
     expect(Object.keys(out)).toEqual(['c1']);
-    expect(out.c1.series.map((s) => s.key)).toEqual(['wheel_speed_rpm', 'tooling1_c']);
+    expect(out.c1.thumb!.series.map((s) => s.key)).toEqual(['wheel_speed_rpm', 'tooling1_c']);
+    expect(out.c1.note).toBeUndefined();
     expect(get.mock.calls.map((c) => c[0])).toContain('/assets/file-1');
   });
 
@@ -98,9 +103,24 @@ describe('conformThumbs', () => {
     expect(get).not.toHaveBeenCalled();
   });
 
-  it('gives no picture when the log is not visible, or the run has no window, and never throws', async () => {
-    expect(await conformThumbs(fakeApi({ readable: false }).api, preview())).toEqual({});
+  it('gives no picture when the run has no window, and never throws', async () => {
     expect(await conformThumbs(fakeApi({ withWindow: false }).api, preview())).toEqual({});
+  });
+
+  it('says the log is not visible when the log row or its file is forbidden', async () => {
+    expect(await conformThumbs(fakeApi({ readable: false }).api, preview())).toEqual({ c1: { note: 'Conform log not visible to you' } });
+    expect(await conformThumbs(fakeApi({ file: 403 }).api, preview())).toEqual({ c1: { note: 'Conform log not visible to you' } });
+  });
+
+  it('says it could not load the log for any other failure', async () => {
+    expect(await conformThumbs(fakeApi({ file: 500 }).api, preview())).toEqual({ c1: { note: 'Could not load the Conform log' } });
+  });
+
+  it('downloads one log once when several runs on it ask at the same time', async () => {
+    const { api, get } = fakeApi();
+    const two: Record<string, DataPreview> = { c1: { kind: 'conform', plotterPath: '/x' }, c2: { kind: 'conform', plotterPath: '/y' } };
+    await conformThumbs(api, two);
+    expect(get.mock.calls.filter((c) => c[0] === '/assets/file-1')).toHaveLength(1);
   });
 });
 
