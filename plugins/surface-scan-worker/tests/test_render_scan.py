@@ -58,12 +58,16 @@ def test_happy_path_renders_and_fills_the_row(world):
     assert re.match(r"^\d{4}-\d\d-\d\dT", row["rendered_at"])
 
 
-def test_the_claim_patches_only_the_public_status(world):
-    """render_error and the render columns are not on the public row (ADR-0023): never PATCH them."""
+def test_the_claim_carries_the_version_read_and_nothing_else(world):
+    """The claim route takes only the version read (ADR-0023: render_error and the render columns are
+    private); the row is 'rendering' at the next version afterwards."""
     _scan_file(world)
-    world.add_scan()
+    row = world.add_scan()
+    version = row["version"]
     job.render_scan(SCAN)
-    assert world.history == [(SCAN, {"render_status": "rendering"})]
+    assert world.history == [
+        (SCAN, {"render_status": "rendering", "claim_version": version})
+    ]
 
 
 RESULT_COLUMNS = {
