@@ -6,4 +6,4 @@ export * from './fastMeta';
 export * from './conform';
 export * from './profile';
 export { fastProfile } from './profiles/fastProfile';
-export { conformProfile, CONFORM_PEAK_LABELS, type ConformRunBundle } from './profiles/conformProfile';
+export { conformProfile, CONFORM_PEAK_LABELS } from './profiles/conformProfile';

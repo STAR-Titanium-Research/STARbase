@@ -11,6 +11,18 @@ export class ConformLogError extends Error {
 	}
 }
 
+/** What the reader sees when the log's file is forbidden to them, and when it cannot be loaded for another reason. */
+export const LOG_NOT_VISIBLE = 'Conform log not visible to you';
+export const LOG_LOAD_FAILED = 'Could not load the Conform log';
+
+/** The log's file answered 403: the reader may not see it. Everything else about the run (summary, steps) still shows. */
+export class ConformLogHiddenError extends ConformLogError {
+	constructor() {
+		super(LOG_NOT_VISIBLE);
+		this.name = 'ConformLogHiddenError';
+	}
+}
+
 interface CatalogueEntry { header: string; key: string; label: string; unit: string; group: ConformGroup }
 
 // In display order. `header` is the canonical machine header (unit included).
