@@ -196,9 +196,12 @@
       "delete": {"permissions": {"owner_person_id": {"user_id": {"_eq": "$CURRENT_USER"}}}}
     },
     "conform_logs": {
-      "create": {"fields": ["log_id", "directus_files_id", "equipment_id", "source_filename", "log_start", "log_end", "n_rows", "duration_s", "series", "totals", "constants"]},
-      "read": {"permissions": {"_or": [{"created_by": {"_eq": "$CURRENT_USER"}}, {"runs": {"_some": {"operation_id": {"readers": {"user_id": {"_eq": "$CURRENT_USER"}}}}}}]}},
+      "create": {"fields": ["log_id", "directus_files_id", "equipment_id", "source_filename", "source_sha256", "log_start", "log_end", "n_rows", "duration_s", "series", "totals", "constants"]},
+      "read": {"permissions": {}},
       "delete": {"permissions": {"created_by": {"_eq": "$CURRENT_USER"}}}
+    },
+    "directus_folders": {
+      "read": {"permissions": {"id": {"_eq": "c04f1000-0000-4000-8000-000000000001"}}}
     },
     "surface_scans": {
       "create": {"fields": ["insert_id", "edge_id", "directus_files_id", "condition", "condition_note", "scanned_on", "operation_id", "notes", "owner_person_id"]},
@@ -222,7 +225,11 @@
       {"field": "sample_id", "parent": "physical_samples", "key": "sample_id", "rule": "update"}
     ],
     "test_sessions_subject": [{"field": "test_sessions_id", "parent": "test_sessions", "key": "session_id", "rule": "update"}],
-    "surface_scans": [{"field": "directus_files_id", "parent": "directus_files", "key": "id", "rule": "read"}]
+    "surface_scans": [{"field": "directus_files_id", "parent": "directus_files", "key": "id", "rule": "read"}],
+    "conform_run_data": [
+      {"field": "operation_id", "parent": "manufacturing_operations", "key": "operation_id", "rule": "update"},
+      {"field": "log_id", "parent": "conform_logs", "key": "log_id", "rule": "read"}
+    ]
   },
   "owner_guards": {
     "physical_samples": {"key": "sample_id", "fields": [{"field": "owner_person_id", "value_key": "person_id"}, {"field": "owner_team_id", "value_key": "team_id"}, {"field": "restricted"}]},

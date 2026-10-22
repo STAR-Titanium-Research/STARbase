@@ -3563,8 +3563,8 @@ grep -qF "$guard_sql" core/extensions/d1-access-guard/index.js \
     && ok "d1-access-guard sends the 'inserted here and never updated' proof this test exercises" \
     || bad "d1-access-guard/index.js no longer contains: $guard_sql (update this test with it)"
 guard_parents=$(python3 -c "import json;print(' '.join(sorted({c['parent'] for v in json.load(open('core/extensions/d1-access-guard/rules.json'))['guards'].values() for c in v})))")
-[[ "$guard_parents" == "campaigns directus_files physical_samples projects test_sessions" ]] \
-    && ok "the guarded parents are exactly campaigns, directus_files, physical_samples, projects and test_sessions" \
+[[ "$guard_parents" == "campaigns conform_logs directus_files manufacturing_operations physical_samples projects test_sessions" ]] \
+    && ok "the guarded parents are exactly campaigns, conform_logs, directus_files, manufacturing_operations, physical_samples, projects and test_sessions" \
     || bad "d1-access-guard now guards another parent ($guard_parents): give it a version column or fail it closed, and extend this test"
 # directus_files (the parent of surface_scans.directus_files_id, ADR-0023) is a Directus system table with no OCC version column, so the guard must
 # never ask it the "inserted here and never updated" question (the query would fail): index.js lists it in UNVERSIONED_PARENTS.
@@ -3574,9 +3574,9 @@ grep -qF "const UNVERSIONED_PARENTS = new Set(['directus_files']);" core/extensi
     && ok "d1-access-guard skips the created-here proof for exactly directus_files" \
     || bad "d1-access-guard/index.js UNVERSIONED_PARENTS is no longer exactly directus_files (update this test with it)"
 run_eq "every guarded parent has the OCC version column" \
-    "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND column_name='version' AND data_type='integer' AND table_name IN ('campaigns','physical_samples','projects','test_sessions')" "4"
+    "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND column_name='version' AND data_type='integer' AND table_name IN ('campaigns','conform_logs','manufacturing_operations','physical_samples','projects','test_sessions')" "6"
 run_eq "every guarded parent has its OCC trigger (version rises on every update)" \
-    "SELECT count(*) FROM pg_trigger WHERE tgfoid='occ_update_trigger_function'::regproc AND NOT tgisinternal AND tgrelid IN ('campaigns'::regclass,'physical_samples'::regclass,'projects'::regclass,'test_sessions'::regclass)" "4"
+    "SELECT count(*) FROM pg_trigger WHERE tgfoid='occ_update_trigger_function'::regproc AND NOT tgisinternal AND tgrelid IN ('campaigns'::regclass,'conform_logs'::regclass,'manufacturing_operations'::regclass,'physical_samples'::regclass,'projects'::regclass,'test_sessions'::regclass)" "6"
 XP=c0000000-0000-4000-8000-00000000f0
 # The "existing" parents are committed first (a transaction cannot be both old and new), then removed.
 $PSQL -q >/dev/null 2>&1 <<SQL
@@ -3584,6 +3584,10 @@ INSERT INTO projects (project_id, project_code, project_name) VALUES ('${XP}01',
 INSERT INTO physical_samples (sample_id, sample_code) VALUES ('${XP}02', 'XMIN-OLD-S');
 INSERT INTO campaigns (campaign_id, project_id, campaign_type, name) VALUES ('${XP}03', '${XP}01', 'testing_campaign', 'xmin old campaign');
 INSERT INTO test_sessions (session_id) VALUES ('${XP}04');
+INSERT INTO manufacturing_operations (operation_id, sample_id, method_id) VALUES ('${XP}05', '${XP}02', (SELECT min(method_id::text)::uuid FROM manufacturing_methods));
+INSERT INTO directus_files (id) VALUES ('${XP}06');
+INSERT INTO conform_logs (log_id, directus_files_id, source_filename, source_sha256, log_start, log_end, n_rows, duration_s, series, totals, constants)
+  VALUES ('${XP}07', '${XP}06', 'xmin.csv', repeat('b', 64), '2025-03-17 13:00+00', '2025-03-17 14:00+00', 1, 0, '[]', '{}', '{}');
 SQL
 xmin_out=$($PSQL 2>&1 <<SQL
 BEGIN;
@@ -3592,27 +3596,39 @@ INSERT INTO projects (project_id, project_code, project_name) VALUES ('${XP}11',
 INSERT INTO physical_samples (sample_id, sample_code) VALUES ('${XP}12', 'XMIN-NEW-S');
 INSERT INTO campaigns (campaign_id, project_id, campaign_type, name) VALUES ('${XP}13', '${XP}01', 'testing_campaign', 'xmin new campaign');
 INSERT INTO test_sessions (session_id) VALUES ('${XP}14');
+INSERT INTO manufacturing_operations (operation_id, sample_id, method_id) VALUES ('${XP}15', '${XP}12', (SELECT min(method_id::text)::uuid FROM manufacturing_methods));
+INSERT INTO directus_files (id) VALUES ('${XP}16');
+INSERT INTO conform_logs (log_id, directus_files_id, source_filename, source_sha256, log_start, log_end, n_rows, duration_s, series, totals, constants)
+  VALUES ('${XP}17', '${XP}16', 'xmin2.csv', repeat('c', 64), '2025-03-17 13:00+00', '2025-03-17 14:00+00', 1, 0, '[]', '{}', '{}');
 SELECT 'old_before_update:' || (SELECT count(*) FROM projects WHERE project_id='${XP}01' AND xmin = pg_current_xact_id()::xid AND version = 1);
 -- pre-existing parents updated by this transaction (same xmin as ours, version raised by the OCC trigger)
 UPDATE projects SET project_name = 'touched' WHERE project_id = '${XP}01';
 UPDATE physical_samples SET notes = 'touched' WHERE sample_id = '${XP}02';
 UPDATE campaigns SET name = 'touched' WHERE campaign_id = '${XP}03';
 UPDATE test_sessions SET notes = 'touched' WHERE session_id = '${XP}04';
+UPDATE manufacturing_operations SET outcome_notes = 'touched' WHERE operation_id = '${XP}05';
+UPDATE conform_logs SET source_filename = 'touched' WHERE log_id = '${XP}07';
 SELECT 'updated_here_xmin_alone:' || (
     (SELECT count(*) FROM projects WHERE project_id='${XP}01' AND xmin = pg_current_xact_id()::xid)
   + (SELECT count(*) FROM physical_samples WHERE sample_id='${XP}02' AND xmin = pg_current_xact_id()::xid)
   + (SELECT count(*) FROM campaigns WHERE campaign_id='${XP}03' AND xmin = pg_current_xact_id()::xid)
-  + (SELECT count(*) FROM test_sessions WHERE session_id='${XP}04' AND xmin = pg_current_xact_id()::xid));
+  + (SELECT count(*) FROM test_sessions WHERE session_id='${XP}04' AND xmin = pg_current_xact_id()::xid)
+  + (SELECT count(*) FROM manufacturing_operations WHERE operation_id='${XP}05' AND xmin = pg_current_xact_id()::xid)
+  + (SELECT count(*) FROM conform_logs WHERE log_id='${XP}07' AND xmin = pg_current_xact_id()::xid));
 SELECT 'updated_here_guard:' || (
     (SELECT count(*) FROM projects WHERE project_id='${XP}01' AND $guard_sql)
   + (SELECT count(*) FROM physical_samples WHERE sample_id='${XP}02' AND $guard_sql)
   + (SELECT count(*) FROM campaigns WHERE campaign_id='${XP}03' AND $guard_sql)
-  + (SELECT count(*) FROM test_sessions WHERE session_id='${XP}04' AND $guard_sql));
+  + (SELECT count(*) FROM test_sessions WHERE session_id='${XP}04' AND $guard_sql)
+  + (SELECT count(*) FROM manufacturing_operations WHERE operation_id='${XP}05' AND $guard_sql)
+  + (SELECT count(*) FROM conform_logs WHERE log_id='${XP}07' AND $guard_sql));
 SELECT 'inserted_here_guard:' || (
     (SELECT count(*) FROM projects WHERE project_id='${XP}11' AND $guard_sql)
   + (SELECT count(*) FROM physical_samples WHERE sample_id='${XP}12' AND $guard_sql)
   + (SELECT count(*) FROM campaigns WHERE campaign_id='${XP}13' AND $guard_sql)
-  + (SELECT count(*) FROM test_sessions WHERE session_id='${XP}14' AND $guard_sql));
+  + (SELECT count(*) FROM test_sessions WHERE session_id='${XP}14' AND $guard_sql)
+  + (SELECT count(*) FROM manufacturing_operations WHERE operation_id='${XP}15' AND $guard_sql)
+  + (SELECT count(*) FROM conform_logs WHERE log_id='${XP}17' AND $guard_sql));
 -- a new row that is then updated in the same transaction no longer qualifies either (fails closed)
 UPDATE projects SET project_name = 'touched' WHERE project_id = '${XP}11';
 SELECT 'inserted_then_updated_guard:' || count(*) FROM projects WHERE project_id='${XP}11' AND $guard_sql;
@@ -3620,6 +3636,9 @@ ROLLBACK;
 SQL
 )
 $PSQL -q >/dev/null 2>&1 <<SQL
+DELETE FROM conform_logs WHERE log_id = '${XP}07';
+DELETE FROM directus_files WHERE id = '${XP}06';
+DELETE FROM manufacturing_operations WHERE operation_id = '${XP}05';
 DELETE FROM test_sessions WHERE session_id = '${XP}04';
 DELETE FROM campaigns WHERE campaign_id = '${XP}03';
 DELETE FROM physical_samples WHERE sample_id = '${XP}02';
@@ -3627,9 +3646,9 @@ DELETE FROM projects WHERE project_id = '${XP}01';
 SQL
 xm_check() { grep -qxF -- "$1" <<<"$xmin_out" && ok "$2" || bad "$2 (psql output: $xmin_out)"; }
 xm_check "old_before_update:0" "a pre-existing parent is not 'created here' (xmin differs)"
-xm_check "updated_here_xmin_alone:4" "xmin alone matches all four pre-existing parents once updated in the transaction (why version = 1 is needed)"
-xm_check "updated_here_guard:0" "the guard's proof refuses a pre-existing parent updated in the same transaction (samples, tests, campaigns, projects)"
-xm_check "inserted_here_guard:4" "the guard's proof accepts a parent inserted by the transaction (samples, tests, campaigns, projects)"
+xm_check "updated_here_xmin_alone:6" "xmin alone matches all six pre-existing parents once updated in the transaction (why version = 1 is needed)"
+xm_check "updated_here_guard:0" "the guard's proof refuses a pre-existing parent updated in the same transaction (samples, tests, campaigns, projects, operations, Conform logs)"
+xm_check "inserted_here_guard:6" "the guard's proof accepts a parent inserted by the transaction (samples, tests, campaigns, projects, operations, Conform logs)"
 xm_check "inserted_then_updated_guard:0" "a parent inserted and then updated in the same transaction is refused (fails closed)"
 
 # Every path of every rule must resolve against the Directus metadata: a filter on owner_person_id.user_id
@@ -3925,10 +3944,10 @@ $la_up
 $rr_up
 $ll_up
 $tr_up
--- 20261012000164 (label_templates), 20261014000177 (batches) and 20261022000207 (conform_logs, conform_run_data), custom-rows and new collections, run after these and add their rows, which are the generated ones
+-- 20261012000164 (label_templates), 20261014000177 (batches), 20261022000207 (conform_logs, conform_run_data) and 20261022000209 (conform_logs again, directus_folders), custom-rows and new collections, run after these and add their rows, which are the generated ones
 -- (the surface_scans rows come with tr_up: migration 205's rules block)
 INSERT INTO directus_permissions (collection, action, permissions, validation, fields, policy)
-  SELECT collection, action, permissions::json, '{}'::json, fields, '$LM' FROM _gen WHERE collection IN ('label_templates', 'batches', 'conform_logs', 'conform_run_data');
+  SELECT collection, action, permissions::json, '{}'::json, fields, '$LM' FROM _gen WHERE collection IN ('label_templates', 'batches', 'conform_logs', 'conform_run_data', 'directus_folders');
 SELECT 'up_exact:' || count(*) FROM _gen g JOIN directus_permissions p
   ON p.policy = '$LM' AND p.collection = g.collection AND p.action = g.action AND p.permissions::jsonb = g.permissions
  AND (g.fields = '*' OR p.fields = g.fields) AND (g.validation = '{}'::jsonb OR p.validation::jsonb = g.validation)
@@ -3937,8 +3956,8 @@ $tr_down
 $ll_down
 $rr_down
 $la_down
--- the replay's own rows for label_templates, batches, surface_scans and the Conform tables go before the older migrations' down sections run
-DELETE FROM directus_permissions WHERE policy = '$LM' AND collection IN ('label_templates', 'batches', 'surface_scans', 'conform_logs', 'conform_run_data');
+-- the replay's own rows for label_templates, batches, surface_scans, the Conform tables and the Conform Logs folder go before the older migrations' down sections run
+DELETE FROM directus_permissions WHERE policy = '$LM' AND collection IN ('label_templates', 'batches', 'surface_scans', 'conform_logs', 'conform_run_data', 'directus_folders');
 $jr_down
 $sf_down
 SELECT 'up_backup_rows:' || count(*) FROM d1_private.lab_member_permissions_backup;
@@ -6170,11 +6189,11 @@ SELECT 'dn_comment_restored:' || (obj_description('d1_private.readers_of_sample(
 $lv_down
 SELECT 'dn_twice_functions_with_viewers:' || count(*) FROM pg_proc p WHERE p.pronamespace = 'd1_private'::regnamespace AND position('v_viewers' IN p.prosrc) > 0;
 $lv_up
--- 185's up section is a snapshot: it knows nothing of the read rows later migrations added (migration 192 for surface_scans, migration 207 for conform_logs and conform_run_data), so the replay is three short.
+-- 185's up section is a snapshot: it knows nothing of the read rows later migrations added (migration 192 for surface_scans, migration 207 for conform_logs and conform_run_data, migration 209 for directus_folders), so the replay is four short.
 SELECT 'up2_exact:' || count(*) FROM _vgen g JOIN directus_permissions p
   ON p.policy = '$VW' AND p.collection = g.collection AND p.action = g.action
  AND p.permissions::jsonb = g.permissions AND p.validation::jsonb = g.validation AND p.fields = g.fields
- WHERE g.collection NOT IN ('surface_scans', 'conform_logs', 'conform_run_data');
+ WHERE g.collection NOT IN ('surface_scans', 'conform_logs', 'conform_run_data', 'directus_folders');
 SELECT 'up2_stored:' || count(*) FROM directus_permissions WHERE policy = '$VW';
 SELECT 'up2_objects:' || (to_regclass('d1_private.v_viewers') IS NOT NULL) || '/' || (SELECT count(*) FROM pg_trigger WHERE tgname IN ('directus_users_readers_lock','directus_users_readers_ins','directus_users_readers_upd','directus_users_readers_del'));
 SELECT 'up2_functions_with_viewers:' || count(*) FROM pg_proc p WHERE p.pronamespace = 'd1_private'::regnamespace AND position('v_viewers' IN p.prosrc) > 0;
@@ -6212,8 +6231,8 @@ lvx_check "dn_functions_with_viewers:0" "down: no readers function lists the vie
 lvx_check "dn_drift:0" "down: readers_drift() is empty"
 lvx_check "dn_comment_restored:true" "down: the function comments are the old ones"
 lvx_check "dn_twice_functions_with_viewers:0" "down twice does nothing the second time"
-lvx_check "up2_exact:$((lvx_n - 3))" "up again: every generated row is back, exact (but the surface_scans row of migration 192 and the two Conform rows of migration 207)"
-lvx_check "up2_stored:$((lvx_n - 3))" "up again: no more and no fewer rows (but the surface_scans row of migration 192 and the two Conform rows of migration 207)"
+lvx_check "up2_exact:$((lvx_n - 4))" "up again: every generated row is back, exact (but the surface_scans row of migration 192, the two Conform rows of migration 207 and the folder row of migration 209)"
+lvx_check "up2_stored:$((lvx_n - 4))" "up again: no more and no fewer rows (but the surface_scans row of migration 192, the two Conform rows of migration 207 and the folder row of migration 209)"
 lvx_check "up2_objects:true/4" "up again: the view and four triggers are back"
 lvx_check "up2_functions_with_viewers:12" "up again: twelve readers functions list the viewers"
 lvx_check "up2_drift:0" "up again: readers_drift() is empty"
@@ -8402,8 +8421,8 @@ INSERT INTO manufacturing_operations (operation_id, sample_id, method_id, equipm
 SELECT v.op::uuid, (SELECT sample_id FROM physical_samples WHERE sample_code = v.sc), (SELECT method_id FROM manufacturing_methods WHERE method_code = 'CF'),
        (SELECT equipment_id FROM equipment WHERE equipment_name = 'Conform'), '2025-03-17 13:00+00', v.run
 FROM (VALUES ('${CLK}a1', 'CLT-IN-1', 91), ('${CLK}a2', 'CLT-IN-2', 92)) AS v (op, sc, run);
-INSERT INTO conform_logs (log_id, directus_files_id, equipment_id, source_filename, log_start, log_end, n_rows, duration_s, series, totals, constants)
-VALUES ('${CLK}b1', '${CLK}f1', (SELECT equipment_id FROM equipment WHERE equipment_name = 'Conform'), 'TiSwarf.csv',
+INSERT INTO conform_logs (log_id, directus_files_id, equipment_id, source_filename, source_sha256, log_start, log_end, n_rows, duration_s, series, totals, constants)
+VALUES ('${CLK}b1', '${CLK}f1', (SELECT equipment_id FROM equipment WHERE equipment_name = 'Conform'), 'TiSwarf.csv', repeat('a', 64),
         '2025-03-17 13:00:00+00', '2025-03-17 14:00:00+00', 3601, 3600, '[]', '{}', '{"version":1}');
 SELECT 'cl_log_defaults:' || version || ',' || (created_by IS NULL) || ',' || (created_at IS NOT NULL) FROM conform_logs WHERE log_id = '${CLK}b1';
 INSERT INTO conform_run_data (id, operation_id, log_id, window_start, window_end, status)
@@ -8455,9 +8474,12 @@ SELECT 'cl_audit:' || count(*) FROM audit_logs WHERE table_name = 'conform_run_d
 SET LOCAL ROLE d1_llm_readonly;
 SELECT 'cl_llm_sees:' || (SELECT count(*) FROM conform_logs) || ',' || (SELECT count(*) FROM conform_run_data);
 RESET ROLE;
--- the log goes: its runs keep their rows with log_id NULL
-DELETE FROM conform_logs WHERE log_id = '${CLK}b1';
-SELECT 'cl_log_delete_nulls:' || count(*) || ',' || count(*) FILTER (WHERE log_id IS NULL) FROM conform_run_data WHERE id IN ('${CLK}c1', '${CLK}c2');
+-- a log a run still uses cannot go (migration 209's trigger; 207 alone would have set the runs' log_id to NULL)
+DO \$\$ BEGIN
+    DELETE FROM conform_logs WHERE log_id = '${CLK}b1';
+    RAISE NOTICE 'cl_log_delete_in_use:accepted';
+EXCEPTION WHEN restrict_violation THEN RAISE NOTICE 'cl_log_delete_in_use:refused'; END \$\$;
+SELECT 'cl_log_delete_kept:' || count(*) || ',' || count(*) FILTER (WHERE log_id IS NOT NULL) FROM conform_run_data WHERE id IN ('${CLK}c1', '${CLK}c2');
 -- the operation goes: its run row goes with it
 DELETE FROM manufacturing_operations WHERE operation_id = '${CLK}a1';
 SELECT 'cl_op_delete_cascades:' || count(*) FROM conform_run_data WHERE id = '${CLK}c1';
@@ -8481,12 +8503,12 @@ cl_check() { grep -q "$1" <<<"$cl_out" && ok "$2" || bad "$2 (psql output: $cl_o
 cl_check "^cl_tables:true,true$" "207: conform_logs and conform_run_data exist"
 cl_check "^cl_uncommented:0$" "207: every column of both tables has a COMMENT"
 cl_check "^cl_table_comments:2$" "207: both tables have a COMMENT"
-cl_check "^cl_triggers:conform_logs.audit_conform_logs,conform_logs.occ_conform_logs,conform_run_data.audit_conform_run_data,conform_run_data.conform_run_data_window_guard,conform_run_data.occ_conform_run_data$" "207: audit, OCC and the window guard are attached"
+cl_check "^cl_triggers:conform_logs.audit_conform_logs,conform_logs.occ_conform_logs,conform_logs.refuse_delete_in_use,conform_run_data.audit_conform_run_data,conform_run_data.conform_run_data_window_guard,conform_run_data.occ_conform_run_data,conform_run_data.sync_run_windows$" "207 and 209: audit, OCC, the window guard, the delete refusal and the run-window sync are attached"
 cl_check "^cl_trigger_comments:0$" "207: every trigger has a COMMENT"
 cl_check "^cl_llm:true,true$" "207: the Ask-the-database role can SELECT both tables"
 cl_check "^cl_rls:2,4$" "207: both tables have row security (not forced) with the open and the d1_llm_readonly policy"
 cl_check "^cl_collections:conform_logs/true/manufacturing_methods,conform_run_data/true/manufacturing_methods$" "207: both are hidden Directus collections grouped under manufacturing_methods"
-cl_check "^cl_field_rows:15/16,12/12,0$" "207: every column of both tables has a Directus field row (the aliases are extra)"
+cl_check "^cl_field_rows:17/18,12/12,0$" "207 and 209: every column of both tables has a Directus field row (the aliases are extra; 209 adds source_sha256 and run_windows)"
 cl_check "^cl_aliases:conform_logs.runs=o2m,manufacturing_operations.conform_run=o2m$" "207: the O2M aliases manufacturing_operations.conform_run and conform_logs.runs exist"
 cl_check "^cl_relations:conform_logs.created_by>directus_users,conform_logs.directus_files_id>directus_files,conform_logs.equipment_id>equipment,conform_run_data.log_id>conform_logs.runs,conform_run_data.operation_id>manufacturing_operations.conform_run$" "207: the five relations are registered"
 cl_check "^cl_perm_lm:conform_logs.create,conform_logs.delete,conform_logs.read,conform_run_data.create,conform_run_data.delete,conform_run_data.read,conform_run_data.update$" "207: Lab Member rows: logs create/read/delete, run data create/read/update/delete"
@@ -8507,7 +8529,8 @@ cl_check "cl_one_per_operation:refused" "207: one run row per operation"
 cl_check "cl_file_delete:refused" "207: a file with a log row cannot be deleted before the log"
 cl_check "^cl_audit:1$" "207: the run insert was audited"
 cl_check "^cl_llm_sees:1,2$" "207: the Ask-the-database role sees the log and both runs of unrestricted operations"
-cl_check "^cl_log_delete_nulls:2,2$" "207: deleting the log keeps its runs with log_id NULL"
+cl_check "cl_log_delete_in_use:refused" "209: a log that runs still use cannot be deleted (restrict_violation)"
+cl_check "^cl_log_delete_kept:2,2$" "209: the refused delete leaves both runs linked to the log"
 cl_check "^cl_op_delete_cascades:0$" "207: deleting the operation deletes its run row"
 cl_check "^cl_dn_tables:gone,gone$" "207 down: both tables are dropped"
 cl_check "^cl_dn_meta:0,0,0,0$" "207 down: the Directus fields, collections, permissions and relations are removed"
@@ -8578,6 +8601,273 @@ cf_check "cf_up3_group_rows:1" "208 up twice: still one grp_conform row"
 cf_check "cf_redown_backup:gone" "208 down runs again after up"
 else
 bad "the Conform form layout migration is missing ($CF_MIG)"
+fi
+
+echo "== Migration 209: Conform review fixes (source_sha256, run_windows, delete refusal, access, folder, sort, CF adoption; up, behaviour, down, up) =="
+CR_MIG=db/migrations/20261022000209_conform_review_fixes.sql
+if [[ -f "$CR_MIG" ]]; then
+cr_up=$(awk '/-- migrate:up/{f=1;next}/-- migrate:down/{f=0}f' "$CR_MIG")
+cr_down=$(awk '/-- migrate:down/{f=1;next}f' "$CR_MIG")
+K9=c0f90000-0000-4000-8000-0000000000
+LMP=20000002-0000-0000-0000-000000000002
+VWP=20000002-0000-0000-0000-000000000003
+# the windows of one log as 'op@start/end op@start/end' (op = the last two characters of the operation id), in the order of the array
+cr_win() { echo "(SELECT coalesce(string_agg(right(e ->> 'operation_id', 2) || '@' || (e ->> 'start') || '/' || (e ->> 'end'), ' ' ORDER BY n), '<none>') FROM conform_logs l, jsonb_array_elements(l.run_windows) WITH ORDINALITY AS t (e, n) WHERE l.log_id = '${K9}$1')"; }
+cr_out=$($PSQL -q 2>&1 <<SQL
+BEGIN;
+-- structure: the columns, constraints, functions and triggers 209 adds are commented and typed as the contract says
+SELECT 'cr_sha_column:' || data_type || '/' || is_nullable FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'conform_logs' AND column_name = 'source_sha256';
+SELECT 'cr_windows_column:' || data_type || '/' || is_nullable || '/' || column_default FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'conform_logs' AND column_name = 'run_windows';
+SELECT 'cr_uncommented:' || (SELECT count(*) FROM information_schema.columns c WHERE c.table_schema = 'public' AND c.table_name IN ('conform_logs', 'conform_run_data')
+    AND col_description(format('%I.%I', c.table_schema, c.table_name)::regclass, c.ordinal_position) IS NULL);
+SELECT 'cr_constraints:' || string_agg(conname || '=' || (obj_description(oid, 'pg_constraint') IS NOT NULL), ',' ORDER BY conname) FROM pg_constraint
+    WHERE conrelid = 'conform_logs'::regclass AND conname IN ('conform_logs_source_sha256_key', 'conform_logs_source_sha256_check');
+SELECT 'cr_functions:' || count(*) || '/' || count(*) FILTER (WHERE obj_description(oid, 'pg_proc') IS NOT NULL) FROM pg_proc
+    WHERE proname IN ('conform_logs_refresh_run_windows', 'conform_run_data_sync_run_windows', 'conform_logs_refuse_delete_in_use');
+SELECT 'cr_triggers:' || count(*) || '/' || count(*) FILTER (WHERE obj_description(oid, 'pg_trigger') IS NOT NULL) FROM pg_trigger
+    WHERE tgname IN ('sync_run_windows', 'refuse_delete_in_use') AND NOT tgisinternal;
+SELECT 'cr_field_rows:' || count(*) || '/' || count(*) FILTER (WHERE readonly) FROM directus_fields WHERE collection = 'conform_logs' AND field IN ('source_sha256', 'run_windows');
+SELECT 'cr_sort:' || (SELECT sort FROM directus_collections WHERE collection = 'conform_logs') || ',' || (SELECT count(*) FROM directus_collections WHERE "group" = 'manufacturing_methods'
+    AND sort = (SELECT sort FROM directus_collections WHERE collection = 'conform_logs'));
+-- access, as stored
+SELECT 'cr_logs_read_open:' || count(*) FROM directus_permissions WHERE collection = 'conform_logs' AND action = 'read' AND permissions::jsonb = '{}'::jsonb AND policy IN ('$LMP', '$VWP');
+SELECT 'cr_logs_create_fields:' || (position('source_sha256' IN fields) > 0) || ',' || (position('run_windows' IN fields) = 0) FROM directus_permissions WHERE collection = 'conform_logs' AND action = 'create' AND policy = '$LMP';
+SELECT 'cr_logs_no_update:' || count(*) FROM directus_permissions WHERE collection = 'conform_logs' AND action = 'update';
+SELECT 'cr_folder_rows:' || count(*) || '/' || count(*) FILTER (WHERE permissions::jsonb = '{"id":{"_eq":"c04f1000-0000-4000-8000-000000000001"}}'::jsonb) FROM directus_permissions
+    WHERE collection = 'directus_folders' AND action = 'read' AND policy IN ('$LMP', '$VWP');
+SELECT 'cr_folder_rows_only:' || count(*) FROM directus_permissions WHERE collection = 'directus_folders';
+-- fixture: two logs on the Conform machine, two Conform operations
+INSERT INTO directus_files (id) VALUES ('${K9}f1'), ('${K9}f2');
+INSERT INTO physical_samples (sample_code, form) VALUES ('CRB-IN-1', 'powder'), ('CRB-IN-2', 'powder');
+INSERT INTO manufacturing_operations (operation_id, sample_id, method_id, equipment_id, operation_date, conform_run_number)
+SELECT v.op::uuid, (SELECT sample_id FROM physical_samples WHERE sample_code = v.sc), (SELECT method_id FROM manufacturing_methods WHERE method_code = 'CF'),
+       (SELECT equipment_id FROM equipment WHERE equipment_name = 'Conform'), '2025-03-17 13:00+00', v.run
+FROM (VALUES ('${K9}a1', 'CRB-IN-1', 191), ('${K9}a2', 'CRB-IN-2', 192)) AS v (op, sc, run);
+INSERT INTO conform_logs (log_id, directus_files_id, source_filename, source_sha256, log_start, log_end, n_rows, duration_s, series, totals, constants)
+VALUES ('${K9}b1', '${K9}f1', 'one.csv', repeat('a', 64), '2025-03-17 13:00:00+00', '2025-03-17 14:00:00+00', 3601, 3600, '[]', '{}', '{}'),
+       ('${K9}b2', '${K9}f2', 'two.csv', repeat('b', 64), '2025-03-17 15:00:00+00', '2025-03-17 16:00:00+00', 3601, 3600, '[]', '{}', '{}');
+-- a second file with the same bytes, or a hash that is not 64 lowercase hex digits, or none, is refused
+INSERT INTO directus_files (id) VALUES ('${K9}f3');
+DO \$\$ BEGIN
+    INSERT INTO conform_logs (directus_files_id, source_filename, source_sha256, log_start, log_end, n_rows, duration_s, series, totals, constants)
+    VALUES ('${K9}f3', 'dup.csv', repeat('a', 64), '2025-03-17 13:00:00+00', '2025-03-17 14:00:00+00', 1, 0, '[]', '{}', '{}');
+    RAISE NOTICE 'cr_sha_unique:accepted';
+EXCEPTION WHEN unique_violation THEN RAISE NOTICE 'cr_sha_unique:refused:%', SQLERRM; END \$\$;
+DO \$\$ BEGIN
+    INSERT INTO conform_logs (directus_files_id, source_filename, source_sha256, log_start, log_end, n_rows, duration_s, series, totals, constants)
+    VALUES ('${K9}f3', 'up.csv', upper(repeat('c', 64)), '2025-03-17 13:00:00+00', '2025-03-17 14:00:00+00', 1, 0, '[]', '{}', '{}');
+    RAISE NOTICE 'cr_sha_format:accepted';
+EXCEPTION WHEN check_violation THEN RAISE NOTICE 'cr_sha_format:refused'; END \$\$;
+DO \$\$ BEGIN
+    INSERT INTO conform_logs (directus_files_id, source_filename, log_start, log_end, n_rows, duration_s, series, totals, constants)
+    VALUES ('${K9}f3', 'none.csv', '2025-03-17 13:00:00+00', '2025-03-17 14:00:00+00', 1, 0, '[]', '{}', '{}');
+    RAISE NOTICE 'cr_sha_required:accepted';
+EXCEPTION WHEN not_null_violation THEN RAISE NOTICE 'cr_sha_required:refused'; END \$\$;
+-- run_windows follows insert, update and delete of run windows
+SELECT 'cr_win_empty:' || $(cr_win b1) || '/' || (SELECT run_windows::text FROM conform_logs WHERE log_id = '${K9}b1');
+INSERT INTO conform_run_data (id, operation_id, log_id, window_start, window_end, status)
+VALUES ('${K9}c1', '${K9}a1', '${K9}b1', '2025-03-17 13:10:00+00', '2025-03-17 13:20:00+00', 'done');
+SELECT 'cr_win_insert:' || $(cr_win b1);
+INSERT INTO conform_run_data (id, operation_id, log_id, window_start, window_end, status)
+VALUES ('${K9}c2', '${K9}a2', '${K9}b1', '2025-03-17 13:30:00+00', '2025-03-17 13:40:00.123456+00', 'done');
+SELECT 'cr_win_two:' || $(cr_win b1);
+UPDATE conform_run_data SET window_start = '2025-03-17 13:50:00+00', window_end = '2025-03-17 13:55:00+00' WHERE id = '${K9}c1';
+SELECT 'cr_win_update_sorted:' || $(cr_win b1);
+UPDATE conform_run_data SET window_end = NULL WHERE id = '${K9}c2';
+SELECT 'cr_win_one_end_left_out:' || $(cr_win b1);
+UPDATE conform_run_data SET window_end = '2025-03-17 13:40:00+00' WHERE id = '${K9}c2';
+SELECT 'cr_win_both_ends_again:' || $(cr_win b1);
+UPDATE conform_run_data SET window_start = NULL, window_end = NULL, status = 'no_window' WHERE id = '${K9}c2';
+SELECT 'cr_win_cleared:' || $(cr_win b1);
+UPDATE conform_run_data SET log_id = '${K9}b2', window_start = '2025-03-17 15:10:00+00', window_end = '2025-03-17 15:20:00+00', status = 'done' WHERE id = '${K9}c2';
+SELECT 'cr_win_moved_from:' || $(cr_win b1);
+SELECT 'cr_win_moved_to:' || $(cr_win b2);
+SELECT 'cr_win_version:' || version FROM conform_logs WHERE log_id = '${K9}b2';
+UPDATE conform_run_data SET summary = '{"x":1}' WHERE id = '${K9}c2';
+SELECT 'cr_win_other_column:' || version FROM conform_logs WHERE log_id = '${K9}b2';
+DELETE FROM conform_run_data WHERE id = '${K9}c1';
+SELECT 'cr_win_delete:' || $(cr_win b1);
+-- a log a run still uses cannot be deleted, an unused one can
+DO \$\$ BEGIN
+    DELETE FROM conform_logs WHERE log_id = '${K9}b2';
+    RAISE NOTICE 'cr_delete_in_use:accepted';
+EXCEPTION WHEN restrict_violation THEN RAISE NOTICE 'cr_delete_in_use:refused:%', SQLERRM; END \$\$;
+SELECT 'cr_delete_in_use_kept:' || (SELECT count(*) FROM conform_logs WHERE log_id = '${K9}b2') || ',' || (SELECT count(*) FROM conform_run_data WHERE id = '${K9}c2' AND log_id = '${K9}b2');
+DELETE FROM conform_logs WHERE log_id = '${K9}b1';
+SELECT 'cr_delete_unused:' || count(*) FROM conform_logs WHERE log_id = '${K9}b1';
+INSERT INTO conform_logs (log_id, directus_files_id, source_filename, source_sha256, log_start, log_end, n_rows, duration_s, series, totals, constants)
+VALUES ('${K9}b1', '${K9}f1', 'one.csv', repeat('a', 64), '2025-03-17 13:00:00+00', '2025-03-17 14:00:00+00', 3601, 3600, '[]', '{}', '{}');
+INSERT INTO conform_run_data (id, operation_id, log_id, window_start, window_end, status)
+VALUES ('${K9}c1', '${K9}a1', '${K9}b1', '2025-03-17 13:10:00+00', '2025-03-17 13:20:00+00', 'done');
+-- the window guard of 207 is still there as the backstop
+DO \$\$ BEGIN
+    UPDATE conform_run_data SET log_id = '${K9}b1', window_start = '2025-03-17 13:15:00+00', window_end = '2025-03-17 13:30:00+00' WHERE id = '${K9}c2';
+    RAISE NOTICE 'cr_guard_backstop:accepted';
+EXCEPTION WHEN check_violation THEN RAISE NOTICE 'cr_guard_backstop:refused:%', SQLERRM; END \$\$;
+-- down: 207's state
+$cr_down
+SELECT 'cr_dn_columns:' || count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'conform_logs' AND column_name IN ('source_sha256', 'run_windows');
+SELECT 'cr_dn_objects:' || (SELECT count(*) FROM pg_proc WHERE proname IN ('conform_logs_refresh_run_windows', 'conform_run_data_sync_run_windows', 'conform_logs_refuse_delete_in_use'))
+    || '/' || (SELECT count(*) FROM pg_trigger WHERE tgname IN ('sync_run_windows', 'refuse_delete_in_use') AND NOT tgisinternal);
+SELECT 'cr_dn_field_rows:' || count(*) FROM directus_fields WHERE collection = 'conform_logs' AND field IN ('source_sha256', 'run_windows');
+SELECT 'cr_dn_sort:' || (SELECT sort FROM directus_collections WHERE collection = 'conform_logs');
+SELECT 'cr_dn_logs_read:' || (permissions::jsonb ? '_or') FROM directus_permissions WHERE collection = 'conform_logs' AND action = 'read' AND policy = '$LMP';
+SELECT 'cr_dn_logs_read_viewer:' || (permissions::jsonb ? '_or') FROM directus_permissions WHERE collection = 'conform_logs' AND action = 'read' AND policy = '$VWP';
+SELECT 'cr_dn_logs_create_fields:' || (position('source_sha256' IN fields) = 0) FROM directus_permissions WHERE collection = 'conform_logs' AND action = 'create' AND policy = '$LMP';
+SELECT 'cr_dn_folder_rows:' || count(*) FROM directus_permissions WHERE collection = 'directus_folders';
+SELECT 'cr_dn_log_id_comment:' || (col_description('conform_run_data'::regclass, (SELECT attnum FROM pg_attribute WHERE attrelid = 'conform_run_data'::regclass AND attname = 'log_id')) LIKE '%or after the log was deleted%');
+SELECT 'cr_dn_runs:' || (SELECT count(*) FROM conform_run_data WHERE id IN ('${K9}c1', '${K9}c2'));
+-- up again: the windows are recomputed from the runs, a log gets its placeholder hash
+$cr_up
+SELECT 'cr_up2_win_b1:' || $(cr_win b1);
+SELECT 'cr_up2_win_b2:' || $(cr_win b2);
+SELECT 'cr_up2_placeholder:' || count(*) || '/' || count(*) FILTER (WHERE source_sha256 = encode(sha256(convert_to(log_id::text, 'UTF8')), 'hex')) FROM conform_logs WHERE log_id IN ('${K9}b1', '${K9}b2');
+SELECT 'cr_up2_sort:' || (SELECT sort FROM directus_collections WHERE collection = 'conform_logs');
+SELECT 'cr_up2_folder_rows:' || count(*) FROM directus_permissions WHERE collection = 'directus_folders';
+SELECT 'cr_up2_logs_read_open:' || count(*) FROM directus_permissions WHERE collection = 'conform_logs' AND action = 'read' AND permissions::jsonb = '{}'::jsonb;
+$cr_down
+SELECT 'cr_redown_columns:' || count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'conform_logs' AND column_name IN ('source_sha256', 'run_windows');
+ROLLBACK;
+SQL
+)
+cr_check() { grep -qxF -- "$1" <<<"$cr_out" && ok "$2" || bad "$2 (wanted $1; psql output: $(echo "$cr_out" | head -60 | tr '\n' ' ' | cut -c1-900))"; }
+cr_check "cr_sha_column:text/NO" "209: conform_logs.source_sha256 is text NOT NULL"
+cr_check "cr_windows_column:jsonb/NO/'[]'::jsonb" "209: conform_logs.run_windows is jsonb NOT NULL DEFAULT '[]'"
+cr_check "cr_uncommented:0" "209: every column of both Conform tables has a COMMENT (the two new ones included)"
+cr_check "cr_constraints:conform_logs_source_sha256_check=true,conform_logs_source_sha256_key=true" "209: the unique and format constraints of source_sha256 exist and are commented"
+cr_check "cr_functions:3/3" "209: the three new functions have a COMMENT"
+cr_check "cr_triggers:2/2" "209: the two new triggers have a COMMENT"
+cr_check "cr_field_rows:2/2" "209: source_sha256 and run_windows have a read-only Directus field row"
+cr_check "cr_sort:13,1" "209: conform_logs has collection sort 13, which no other collection under manufacturing_methods has"
+cr_check "cr_logs_read_open:2" "209: Lab Member and Lab Viewer read every conform_logs row (no filter)"
+cr_check "cr_logs_create_fields:true,true" "209: a member may send source_sha256 when creating a log, and may not send run_windows"
+cr_check "cr_logs_no_update:0" "209: no policy may update a log"
+cr_check "cr_folder_rows:2/2" "209: Lab Member and Lab Viewer have a read row on directus_folders limited to the Conform Logs folder id"
+cr_check "cr_folder_rows_only:2" "209: those two rows are the only directus_folders permission rows"
+cr_notice() { grep -qF -- "$1" <<<"$cr_out" && ok "$2" || bad "$2 (wanted $1; psql output: $(echo "$cr_out" | head -60 | tr '\n' ' ' | cut -c1-900))"; }
+cr_notice 'cr_sha_unique:refused:duplicate key value violates unique constraint "conform_logs_source_sha256_key"' "209: a second log with the same file hash is refused by the unique constraint"
+cr_notice "cr_sha_format:refused" "209: a hash in capitals is refused"
+cr_notice "cr_sha_required:refused" "209: a log without a hash is refused"
+cr_check "cr_win_empty:<none>/[]" "209: a new log has run_windows []"
+cr_check "cr_win_insert:a1@2025-03-17T13:10:00.000Z/2025-03-17T13:20:00.000Z" "209: inserting a run window puts it in run_windows (UTC ISO with milliseconds)"
+cr_check "cr_win_two:a1@2025-03-17T13:10:00.000Z/2025-03-17T13:20:00.000Z a2@2025-03-17T13:30:00.000Z/2025-03-17T13:40:00.123Z" "209: a second window joins the list, sorted by start (milliseconds kept)"
+cr_check "cr_win_update_sorted:a2@2025-03-17T13:30:00.000Z/2025-03-17T13:40:00.123Z a1@2025-03-17T13:50:00.000Z/2025-03-17T13:55:00.000Z" "209: updating a window re-sorts the list"
+cr_check "cr_win_one_end_left_out:a1@2025-03-17T13:50:00.000Z/2025-03-17T13:55:00.000Z" "209: a run with only one window end is not in run_windows"
+cr_check "cr_win_both_ends_again:a2@2025-03-17T13:30:00.000Z/2025-03-17T13:40:00.000Z a1@2025-03-17T13:50:00.000Z/2025-03-17T13:55:00.000Z" "209: setting the second end puts the run back"
+cr_check "cr_win_cleared:a1@2025-03-17T13:50:00.000Z/2025-03-17T13:55:00.000Z" "209: clearing a run's window takes it out"
+cr_check "cr_win_moved_from:a1@2025-03-17T13:50:00.000Z/2025-03-17T13:55:00.000Z" "209: moving a run to another log leaves the first log's other window alone"
+cr_check "cr_win_moved_to:a2@2025-03-17T15:10:00.000Z/2025-03-17T15:20:00.000Z" "209: moving a run to another log adds it there"
+cr_check "cr_win_other_column:$(grep -x 'cr_win_version:[0-9]*' <<<"$cr_out" | cut -d: -f2)" "209: an update of a run's summary does not touch the log (run_windows is only refreshed when the window changes)"
+cr_check "cr_win_delete:<none>" "209: deleting the last run of a log empties its run_windows"
+cr_check "cr_delete_in_use_kept:1,1" "209: the refused delete leaves the log and the run linked"
+cr_check "cr_delete_unused:0" "209: a log no run uses can be deleted"
+grep -q "cr_delete_in_use:refused:conform log .* is still used by a run: unlink it from the run first" <<<"$cr_out" && ok "209: deleting a log a run still uses is refused (restrict_violation) and says to unlink it first" || bad "209: deleting a log in use is not refused as expected (psql output: $(echo "$cr_out" | head -60 | tr '\n' ' ' | cut -c1-900))"
+grep -q "cr_guard_backstop:refused:run window overlaps" <<<"$cr_out" && ok "209: the window guard of 207 still refuses an overlapping window at the database (the backstop)" || bad "209: the window guard no longer refuses overlap (psql output: $(echo "$cr_out" | head -60 | tr '\n' ' ' | cut -c1-900))"
+cr_check "cr_dn_columns:0" "209 down: source_sha256 and run_windows are dropped"
+cr_check "cr_dn_objects:0/0" "209 down: the functions and triggers are dropped"
+cr_check "cr_dn_field_rows:0" "209 down: their Directus field rows are removed"
+cr_check "cr_dn_sort:11" "209 down: conform_logs is back at collection sort 11"
+cr_check "cr_dn_logs_read:true" "209 down: Lab Member's read row of conform_logs is the filtered one of migration 207"
+cr_check "cr_dn_logs_read_viewer:true" "209 down: Lab Viewer's read row of conform_logs is the filtered one of migration 207"
+cr_check "cr_dn_logs_create_fields:true" "209 down: the create field list has no source_sha256"
+cr_check "cr_dn_folder_rows:0" "209 down: the directus_folders read rows are removed"
+cr_check "cr_dn_log_id_comment:true" "209 down: the comment on conform_run_data.log_id is the one of migration 207"
+cr_check "cr_dn_runs:2" "209 down: both runs are still there"
+cr_check "cr_up2_win_b1:a1@2025-03-17T13:10:00.000Z/2025-03-17T13:20:00.000Z" "209 up again: run_windows is recomputed from the runs (log one)"
+cr_check "cr_up2_win_b2:a2@2025-03-17T15:10:00.000Z/2025-03-17T15:20:00.000Z" "209 up again: run_windows is recomputed from the runs (log two)"
+cr_check "cr_up2_placeholder:2/2" "209 up again: a log that exists gets the hash of its own id as a placeholder"
+cr_check "cr_up2_sort:13" "209 up again: conform_logs is at collection sort 13"
+cr_check "cr_up2_folder_rows:2" "209 up again: the two directus_folders read rows are back"
+cr_check "cr_up2_logs_read_open:2" "209 up again: both read rows of conform_logs have no filter"
+cr_check "cr_redown_columns:0" "209 down runs again after up"
+
+# The folder: the CI database has no directus_folders table (a Directus system table), so the migration skips the seed there. A stub table made
+# inside a rolled-back transaction proves the seed, its idempotence and that a folder with files in it is kept by the down.
+cr_f_out=$($PSQL -q 2>&1 <<SQL
+BEGIN;
+CREATE TABLE directus_folders (id uuid PRIMARY KEY, name text NOT NULL, parent uuid);
+ALTER TABLE directus_files ADD COLUMN folder uuid;
+$cr_down
+$cr_up
+SELECT 'cr_folder:' || count(*) || '/' || min(name) || '/' || coalesce(min(parent::text), 'root') FROM directus_folders WHERE id = 'c04f1000-0000-4000-8000-000000000001';
+SELECT 'cr_folder_total:' || count(*) FROM directus_folders;
+INSERT INTO directus_files (id, folder) VALUES ('${K9}f9', 'c04f1000-0000-4000-8000-000000000001');
+$cr_down
+SELECT 'cr_folder_kept:' || count(*) FROM directus_folders;
+$cr_up
+SELECT 'cr_folder_reup:' || count(*) FROM directus_folders;
+DELETE FROM directus_files WHERE id = '${K9}f9';
+$cr_down
+SELECT 'cr_folder_gone:' || count(*) FROM directus_folders;
+ROLLBACK;
+SQL
+)
+cr_f_check() { grep -qxF -- "$1" <<<"$cr_f_out" && ok "$2" || bad "$2 (wanted $1; psql output: $(echo "$cr_f_out" | head -30 | tr '\n' ' ' | cut -c1-700))"; }
+cr_f_check "cr_folder:1/Conform Logs/root" "209: the Conform Logs folder is seeded with the fixed id, at the root"
+cr_f_check "cr_folder_total:1" "209: the seed adds that folder and nothing else"
+cr_f_check "cr_folder_kept:1" "209 down: a folder with a file in it is kept"
+cr_f_check "cr_folder_reup:1" "209 up again: the kept folder is not added twice"
+cr_f_check "cr_folder_gone:0" "209 down: an empty folder is removed"
+
+# The Lab Member rules the guard hook enforces (the generated rows): a member may create or repoint a conform_run_data row only for an
+# operation they may edit, i.e. the operation's stored Lab Member UPDATE rule, which is what rules.json ships for operation_id.
+cr_op_update=$($PSQL -At -c "SELECT permissions::text FROM directus_permissions WHERE policy = '20000002-0000-0000-0000-000000000002' AND collection = 'manufacturing_operations' AND action = 'update'")
+cr_guard=$(python3 - "$cr_op_update" <<'PY'
+import json, sys
+stored = json.loads(sys.argv[1])
+guards = json.load(open('core/extensions/d1-access-guard/rules.json'))['guards']['conform_run_data']
+ok = (
+    [(g['field'], g['parent'], g['key']) for g in guards]
+    == [('operation_id', 'manufacturing_operations', 'operation_id'), ('log_id', 'conform_logs', 'log_id')]
+    and guards[0]['filter'] == stored
+    and guards[1]['filter'] == {}
+)
+print('cr_guard:' + str(ok).lower())
+PY
+)
+[[ "$cr_guard" == "cr_guard:true" ]] && ok "209: the guard hook's rules for conform_run_data are the operation's stored Lab Member update rule (the caller must be able to edit the operation) and an existing log" \
+    || bad "209: the guard hook's rules for conform_run_data differ from the stored operation update rule ($cr_guard)"
+run_eq "209: Lab Member create row of conform_run_data is still unfiltered (Directus ignores create filters; the hook does the work)" \
+    "SELECT permissions::text FROM directus_permissions WHERE policy = '20000002-0000-0000-0000-000000000002' AND collection = 'conform_run_data' AND action = 'create'" "{}"
+
+# Migration 206's adoption gap: 206's down turns a Conform operation into deformation and its up only re-files method CF; 209's up adopts
+# the operations again (and their lineage edges), and only those whose method is CF.
+cr_a_out=$($PSQL -q 2>&1 <<SQL
+BEGIN;
+INSERT INTO physical_samples (sample_code, form) VALUES ('CRA-IN', 'powder'), ('CRA-OUT', 'rod'), ('CRA-IN2', 'powder'), ('CRA-OUT2', 'rod');
+INSERT INTO manufacturing_operations (operation_id, sample_id, output_sample_id, method_id, equipment_id, operation_date, conform_run_number, conform_die_diameter_mm)
+SELECT '${K9}d1', (SELECT sample_id FROM physical_samples WHERE sample_code = 'CRA-IN'), (SELECT sample_id FROM physical_samples WHERE sample_code = 'CRA-OUT'),
+       (SELECT method_id FROM manufacturing_methods WHERE method_code = 'CF'), (SELECT equipment_id FROM equipment WHERE equipment_name = 'Conform'), '2025-03-17 12:00+00', 12, 8;
+INSERT INTO manufacturing_operations (operation_id, sample_id, output_sample_id, method_id, operation_date)
+SELECT '${K9}d2', (SELECT sample_id FROM physical_samples WHERE sample_code = 'CRA-IN2'), (SELECT sample_id FROM physical_samples WHERE sample_code = 'CRA-OUT2'),
+       (SELECT method_id FROM manufacturing_methods WHERE method_code = 'MO'), '2025-03-17 12:00+00';
+SELECT 'cr_a_before:' || string_agg(right(operation_id::text, 2) || '=' || process_category, ',' ORDER BY operation_id) FROM manufacturing_operations WHERE operation_id IN ('${K9}d1', '${K9}d2');
+$cr_down
+$cc_down
+SELECT 'cr_a_after_206_down:' || string_agg(right(operation_id::text, 2) || '=' || process_category, ',' ORDER BY operation_id) FROM manufacturing_operations WHERE operation_id IN ('${K9}d1', '${K9}d2');
+SELECT 'cr_a_edge_after_206_down:' || relationship_type FROM sample_genealogy WHERE child_sample_id = (SELECT sample_id FROM physical_samples WHERE sample_code = 'CRA-OUT');
+$cc_up
+SELECT 'cr_a_after_206_up:' || string_agg(right(operation_id::text, 2) || '=' || process_category, ',' ORDER BY operation_id) FROM manufacturing_operations WHERE operation_id IN ('${K9}d1', '${K9}d2');
+SELECT 'cr_a_method:' || process_category FROM manufacturing_methods WHERE method_code = 'CF';
+$cr_up
+SELECT 'cr_a_after_209_up:' || string_agg(right(operation_id::text, 2) || '=' || process_category, ',' ORDER BY operation_id) FROM manufacturing_operations WHERE operation_id IN ('${K9}d1', '${K9}d2');
+SELECT 'cr_a_edge:' || relationship_type FROM sample_genealogy WHERE child_sample_id = (SELECT sample_id FROM physical_samples WHERE sample_code = 'CRA-OUT');
+SELECT 'cr_a_edge_other:' || relationship_type FROM sample_genealogy WHERE child_sample_id = (SELECT sample_id FROM physical_samples WHERE sample_code = 'CRA-OUT2');
+SELECT 'cr_a_code:' || pass_code FROM manufacturing_operations WHERE operation_id = '${K9}d1';
+ROLLBACK;
+SQL
+)
+cr_a_check() { grep -qxF -- "$1" <<<"$cr_a_out" && ok "$2" || bad "$2 (wanted $1; psql output: $(echo "$cr_a_out" | head -30 | tr '\n' ' ' | cut -c1-900))"; }
+cr_a_check "cr_a_before:d1=conform,d2=deformation" "209: a CF operation is a conform operation, an MO operation a deformation one (fixture)"
+cr_a_check "cr_a_after_206_down:d1=deformation,d2=deformation" "206 down: the Conform operation goes back to deformation"
+cr_a_check "cr_a_edge_after_206_down:derived_from" "206 down: its lineage edge becomes derived_from"
+cr_a_check "cr_a_after_206_up:d1=deformation,d2=deformation" "206 up alone: the operation is not adopted (the gap)"
+cr_a_check "cr_a_method:conform" "206 up: method CF is conform again"
+cr_a_check "cr_a_after_209_up:d1=conform,d2=deformation" "209 up: the CF operation is a conform operation again, the other deformation operation is untouched"
+cr_a_check "cr_a_edge:extruded_from" "209 up: the adopted operation's lineage edge is extruded_from again"
+cr_a_check "cr_a_edge_other:derived_from" "209 up: the other operation's lineage edge is untouched"
+else
+bad "the Conform review fixes migration is missing ($CR_MIG)"
 fi
 
 echo "== Cleanup test rows =="

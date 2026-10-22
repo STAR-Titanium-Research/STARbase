@@ -38,6 +38,7 @@ gen = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(gen)
 
 DOC = gen.load()
+CONFORM_LOGS_FOLDER_ID = "c04f1000-0000-4000-8000-000000000001"  # migration 209
 ROWS = gen.build_rows(DOC)
 VIEWER_ROWS = gen.viewer_rows(DOC, ROWS)
 BY_KEY = {(r["collection"], r["action"]): r for r in ROWS}
@@ -446,9 +447,9 @@ def test_generated_script_block_is_current():
     script = SCRIPTS / "configure_users_and_policies.sql"
     assert gen.render_script(
         script.read_text(encoding="utf-8"), ROWS, VIEWER_ROWS
-    ) == script.read_text(
-        encoding="utf-8"
-    ), "run `python3 scripts/gen_access_rules.py --write`"
+    ) == script.read_text(encoding="utf-8"), (
+        "run `python3 scripts/gen_access_rules.py --write`"
+    )
 
 
 def test_check_command_detects_a_hand_edit(tmp_path):
@@ -729,8 +730,12 @@ def test_every_leaf_matches_the_signed_in_user_or_the_restricted_flag():
                 allowed.add(("user_created", "$CURRENT_USER"))
             if (
                 row["collection"] == "conform_logs"
-            ):  # migration 207: the uploader reads and deletes their own log
+            ):  # migration 207: the uploader deletes their own log
                 allowed.add(("created_by", "$CURRENT_USER"))
+            if (
+                row["collection"] == "directus_folders"
+            ):  # migration 209: members read the one "Conform Logs" folder
+                allowed.add(("id", CONFORM_LOGS_FOLDER_ID))
             assert (key, value) in allowed, (
                 row["collection"],
                 row["action"],
@@ -1138,9 +1143,9 @@ def test_filters_have_the_documented_sizes():
     assert _leaves(BY_KEY[("campaign_samples", "read")]["permissions"]) == 1
     for (collection, action), row in BY_KEY.items():
         if action == "read" and collection in DOC["rules"]:
-            assert (
-                _leaves(row["permissions"]) <= 3 or collection == "project_rollup"
-            ), collection
+            assert _leaves(row["permissions"]) <= 3 or collection == "project_rollup", (
+                collection
+            )
         if action in ("update", "delete") and collection in DOC["rules"]:
             assert _leaves(row["permissions"]) < 20, (collection, action)
 
@@ -1163,9 +1168,9 @@ def test_read_rules_are_the_membership_test_a_one_hop_child_rule_or_the_rollup()
         ("session_data_files", "session_id"), ("session_additional_operators", "session_id"),
         ("test_sessions_subject", "test_sessions_id"), ("project_investigators", "project_id"),
     ):  # fmt: skip
-        assert RULES[(collection, "read")] == {
-            fk: {"readers": {"user_id": U}}
-        }, collection
+        assert RULES[(collection, "read")] == {fk: {"readers": {"user_id": U}}}, (
+            collection
+        )
     # the one two-hop rule left: an edge is readable by readers of its child or its parent
     assert RULES[("sample_genealogy", "read")] == {
         "_or": [
@@ -1458,7 +1463,7 @@ def test_guards_cover_every_junction_that_grants_visibility():
     on them, the endpoint and the trigger functions write them."""
     assert set(DOC["guards"]) == {
         "sample_co_owners", "project_investigators", "campaign_samples", "test_sessions_subject",
-        "surface_scans",
+        "surface_scans", "conform_run_data",
     }  # fmt: skip
     for junction in DOC["guards"]:
         # a ruled junction, or a custom one (surface_scans, ADR-0023: the link to a file the caller must be able to read)
@@ -1484,11 +1489,55 @@ def test_guards_cover_every_junction_that_grants_visibility():
     assert [(c["field"], c["parent"], c["key"]) for c in rules["surface_scans"]] == [
         ("directus_files_id", "directus_files", "id")
     ]
+    assert [(c["field"], c["parent"], c["key"]) for c in rules["conform_run_data"]] == [
+        ("operation_id", "manufacturing_operations", "operation_id"),
+        ("log_id", "conform_logs", "log_id"),
+    ]
     # the filter shipped to the hook is the parent's row named by the guard's `rule`, word for word
     for junction, checks in DOC["guards"].items():
         for check, shipped in zip(checks, rules[junction]):
             row = BY_KEY[(check["parent"], check.get("rule", "update"))]
             assert shipped["filter"] == row["permissions"], (junction, check)
+
+
+def test_conform_logs_are_lab_wide_and_conform_runs_need_edit_rights_on_the_operation():
+    """Review round 1 (docs/superpowers/plans/2026-10-21-conform-runs.md): every member and viewer reads every Conform log
+    (the run records stay private); a log is uploaded by any member, deleted by its uploader, never updated. A run row is
+    created, updated and deleted by someone who may edit its operation: Directus does not filter create, so the guard
+    hook carries the operation's update rule (and the log must exist)."""
+    assert BY_KEY[("conform_logs", "read")]["permissions"] == {}
+    assert BY_KEY[("conform_logs", "read")]["fields"] == "*"
+    viewer = {(r["collection"], r["action"]): r for r in VIEWER_ROWS}
+    assert viewer[("conform_logs", "read")]["permissions"] == {}
+    assert BY_KEY[("conform_logs", "create")]["permissions"] == {}
+    create_fields = BY_KEY[("conform_logs", "create")]["fields"].split(",")
+    assert "source_sha256" in create_fields
+    assert (
+        "run_windows" not in create_fields
+    )  # kept by a trigger, never written by a member
+    assert BY_KEY[("conform_logs", "delete")]["permissions"] == {
+        "created_by": {"_eq": "$CURRENT_USER"}
+    }
+    assert ("conform_logs", "update") not in BY_KEY
+    guards = gen.hook_rules(DOC)["guards"]["conform_run_data"]
+    assert (
+        guards[0]["filter"]
+        == BY_KEY[("manufacturing_operations", "update")]["permissions"]
+    )
+    assert guards[1]["filter"] == {}
+    # the run rows themselves: update and delete follow the operation's update rule through the bare hop
+    for action in ("update", "delete"):
+        assert BY_KEY[("conform_run_data", action)]["permissions"]["_and"][0] == {
+            "operation_id": {"readers": {"user_id": {"_eq": "$CURRENT_USER"}}}
+        }
+
+
+def test_members_and_viewers_read_the_conform_logs_folder_and_nothing_else_of_directus_folders():
+    only = {"id": {"_eq": CONFORM_LOGS_FOLDER_ID}}
+    assert BY_KEY[("directus_folders", "read")]["permissions"] == only
+    assert {a for (c, a) in BY_KEY if c == "directus_folders"} == {"read"}
+    viewer = {(r["collection"], r["action"]): r for r in VIEWER_ROWS}
+    assert viewer[("directus_folders", "read")]["permissions"] == only
 
 
 def test_co_owner_and_investigator_junctions_are_managed_by_the_owner_and_the_pi_only():
@@ -1651,9 +1700,9 @@ def test_update_delete_and_manage_carry_the_reader_term_and_the_editor_or_owner_
     ]
     owner_term = {"_or": [OWN, {"_and": manage_role}]}
     for collection in ("manufacturing_operations", "test_sessions", "campaigns"):
-        assert RULES[(collection, "delete")] == {
-            "_and": [READER_TERM, owner_term]
-        }, collection
+        assert RULES[(collection, "delete")] == {"_and": [READER_TERM, owner_term]}, (
+            collection
+        )
     assert RULES[("campaigns", "update")] == {
         "_and": [READER_TERM, {"_or": [OWN, {"_and": edit_role}]}]
     }
@@ -1789,9 +1838,9 @@ def test_sample_co_owners_update_and_delete_are_owner_only():
     w.readers("physical_samples", "S", "owner", "coowner")
     for action in ("update", "delete"):
         assert _can(w, "u_owner", "sample_co_owners", action) == {row["_n"]}
-        assert (
-            _can(w, "u_coowner", "sample_co_owners", action) == set()
-        ), "a co-owner can no longer change or remove co-owners"
+        assert _can(w, "u_coowner", "sample_co_owners", action) == set(), (
+            "a co-owner can no longer change or remove co-owners"
+        )
         assert _can(w, "u_stranger", "sample_co_owners", action) == set()
     old = Directus(MAIN, w, "u_coowner")
     assert any(
@@ -1824,9 +1873,9 @@ def test_the_open_to_all_leaf_is_a_some_on_the_open_set_and_children_do_not_inhe
     w.open_to_all("OF")
     w.add("machining_force_analysis", operation_id="OF")
     assert "OF" in _can(w, "u_stranger", "manufacturing_operations", "read")
-    assert (
-        _can(w, "u_stranger", "machining_force_analysis", "read") == set()
-    ), "children do not inherit the amnesty"
+    assert _can(w, "u_stranger", "machining_force_analysis", "read") == set(), (
+        "children do not inherit the amnesty"
+    )
 
 
 def test_a_readers_row_of_another_user_does_not_make_the_caller_a_reader():
@@ -1856,9 +1905,9 @@ def test_campaign_samples_write_needs_the_junctions_own_reader_term():
     w.readers("campaign_samples", row["_n"], "owner")
     assert _can(w, "u_campOwner", "campaign_samples", "update") == set()
     assert _can(w, "u_campOwner", "campaign_samples", "delete") == set()
-    assert _can(w, "u_owner", "campaign_samples", "update") == {
-        row["_n"]
-    }, "the sample's owner reads and edits the row"
+    assert _can(w, "u_owner", "campaign_samples", "update") == {row["_n"]}, (
+        "the sample's owner reads and edits the row"
+    )
     w.readers("campaign_samples", row["_n"], "campOwner")
     assert _can(w, "u_campOwner", "campaign_samples", "update") == {row["_n"]}
     assert _can(w, "u_stranger", "campaign_samples", "update") == set()
@@ -1918,6 +1967,10 @@ def _directus(drop=(), restricted=True):
         m2o(table, "record_id", parent, "readers")
         cols.add(f"{table}.user_id")
     m2o("operation_open_to_all", "record_id", "manufacturing_operations", "open_to_all")
+    m2o(
+        "conform_run_data", "log_id", "conform_logs", "runs"
+    )  # the second guard of conform_run_data
+    cols.add("conform_logs.log_id")
     for t, f, one in [
         ("sample_stock_provenance", "sample_id", "physical_samples"),
         ("sample_data_files", "sample_id", "physical_samples"),
@@ -2203,11 +2256,15 @@ def test_no_update_delete_or_manage_filter_contains_a_some():
             if declared.get("rule") == "read":
                 # the one legal place: the parent's own READ rule runs at the root of that collection (the files' `readers`
                 # alias), where Directus accepts `_some`; the guard reads the parent as the caller, so it is exactly that rule
+                assert c["filter"] == BY_KEY[(c["parent"], "read")]["permissions"]
+                if c["filter"] == {}:
+                    # conform_logs.read is open to every member: the guard only asks that the log exists
+                    assert c["parent"] == "conform_logs", (junction, c["parent"])
+                    continue
                 assert json.dumps(c["filter"]).count('"_some"') == 1, (
                     junction,
                     c["parent"],
                 )
-                assert c["filter"] == BY_KEY[(c["parent"], "read")]["permissions"]
                 continue
             assert "_some" not in json.dumps(c["filter"]), (junction, c["parent"])
     for collection, g in hook["ownerGuards"].items():

@@ -589,8 +589,10 @@ def hook_rules(doc: dict) -> dict:
             rule = rules.get(parent, {}).get(action)
             if rule is None:
                 # a custom parent (directus_files): its row's literal filter is what the caller must pass
+                # (an empty filter is a real filter: conform_logs.read is open to every member, so the guard on
+                # conform_run_data.log_id only asks that the log exists)
                 literal = custom.get(parent, {}).get(action, {}).get("permissions")
-                if not literal:
+                if literal is None:
                     raise RulesError(
                         f"guard {junction}: {parent}.{action} has no filter"
                     )
