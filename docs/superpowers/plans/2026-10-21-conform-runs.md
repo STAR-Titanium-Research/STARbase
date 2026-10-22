@@ -428,3 +428,130 @@ export const fastProfile: RunProfile;
 - [ ] Run `directus-ui-reviewer` on the UI diff and `migration-review` on migrations 206–208, both on Opus. Fix the CONFIRMED findings in a follow-up commit per finding.
 - [ ] Run the `ci-local` skill on the merged branch, and fix until clean.
 - [ ] Update this plan's Status table and the spec's Status line. Push, open the PR, and watch CI.
+
+---
+
+## Review round 1 (Opus): fixes
+
+Two Opus reviews (front end and migrations) were run on the merged branch. The maintainer then decided:
+- **Logs are visible to every lab member** (Lab Member and Lab Viewer). Run records (summary, steps, energy) stay private to their readers. This replaces the spec's "readers of any linked run" rule.
+- **The test fixture is synthetic.** `__fixtures__/synthetic-log.csv` replaces the real `tiswarf-excerpt.csv`.
+  - `make_synthetic_log.py` regenerates it, and `synthetic-log.expected.json` holds the expected values, computed in Python from the plan's formulas.
+  - The real-log comparison moves to backlog item C1.
+
+| Stream | Agent profile | State |
+|---|---|---|
+| F1 — schema, guard hook, PDF | `d1-server-implementer` | in progress |
+| F2 — browser code, panels, fixture swap | `directus-ui-implementer` | in progress |
+
+### Contract shared by F1 and F2 (exact names)
+
+- **`conform_logs.source_sha256`**: `text NOT NULL UNIQUE`, the lowercase hex SHA-256 of the uploaded file's raw bytes.
+  - The browser computes it with `crypto.subtle.digest`.
+  - Before uploading, the browser looks it up. If it exists, the browser offers to link that log instead of uploading.
+  - Directus's unique error (`RECORD_NOT_UNIQUE` on `source_sha256`) maps to "This log is already uploaded: use “Use a log already uploaded”."
+- **`conform_logs.run_windows`**: `jsonb NOT NULL DEFAULT '[]'`, kept by a trigger on `conform_run_data`.
+  - It holds `[{operation_id, start, end}]`, sorted by `start`, with only the rows that have both window ends.
+  - The browser draws bands from it. A run the caller can read is labelled with its feedstock or code; any other run is labelled **"Other run"**.
+  - `listLogWindows` reads it.
+- **`conform_logs` access**:
+  - Read: `{}` (every Lab Member and Lab Viewer).
+  - Create: any member.
+  - Delete: `created_by = $CURRENT_USER`.
+  - No update. The browser never PATCHes a log.
+- **`conform_run_data` access**:
+  - Create, update and delete need edit rights on the operation (`operation_id` → the operation's update rule).
+  - Read stays `reader.operation`.
+  - Add `guards.conform_run_data`: `operation_id` → `manufacturing_operations` (update) and `log_id` → `conform_logs` (read). Regenerate the generated files.
+- **Folder.** A fixed-id Directus folder "Conform Logs", id `c04f1000-0000-4000-8000-000000000001`, seeded by the migration (guarded with `to_regclass('directus_folders')`).
+  - Lab Members and Lab Viewers can read that one folder row.
+  - The browser exports `CONFORM_LOGS_FOLDER_ID` with that id and uploads into it, with no lookup by name.
+- **Readable refusals.** A Directus hook extension `core/extensions/d1-conform-guard` (filter hooks) runs the checks before the database does, and throws `InvalidPayloadError` with these messages. The DB triggers stay as a backstop.
+  - Overlap: `Run window overlaps <code> on this log.`. `<code>` is the other run's `pass_code` when the caller can read that operation, otherwise `another run`.
+  - Outside the log: `Run window lies outside the log (<start> to <end>, UK time).`
+  - Delete of a log still used by a run: `This log is still used by a Conform run. Unlink it from the run first.` The DB also refuses this with a BEFORE DELETE trigger. `ON DELETE SET NULL` on `conform_run_data.log_id` is therefore never reached; leave it.
+- **`summary.constants_version`** (a number). The browser stores `CONFORM_POWER_CONSTANTS.version` in each summary, and "Recompute" compares against that, not against `conform_logs.constants`.
+- **Shared formats** (Operation page, plotter and PDF alike):
+  - energy in kWh to 2 decimals
+  - average demand in kW to 2 decimals
+  - durations under an hour as `12 min 05 s`, otherwise as `1 h 23 min`
+  - clock times `HH:MM:SS`, UK local
+
+### F1 tasks (schema + hook + PDF)
+
+1. **New migration `20261022000209_conform_review_fixes.sql`.** Migrations 206–208 are on a pushed branch but not merged; still add a new migration rather than editing them.
+   - `source_sha256` (backfill isn't needed; the table is new), `run_windows` with its trigger, and the delete-refusal trigger.
+   - The access changes and the folder seed (with its read permission).
+   - Collection sort: give `conform_logs` a sort unique under `manufacturing_methods`.
+   - Down restores 207/208's state.
+2. **Migration 206's up adoption gap.** In 209, adopt operations whose method is CF and whose category is `deformation`, setting them to `conform`. 209 runs after 206 on a re-up, so this covers both the 206 down→up path and data. Add a phase1 test.
+3. **`d1-conform-guard` hook extension.** Plain ESM like the other hooks; register it wherever the extensions are listed in compose and CI. It has `index.test.mjs` with fakes covering:
+   - overlap with a readable run and with an unreadable one
+   - outside the log
+   - touching windows `[a, b)` and `[b, c)` accepted
+   - the delete refusal
+4. **`tests/phase1_schema.sh`:**
+   - `run_windows` follows insert, update and delete of run windows
+   - unique `source_sha256`
+   - the delete refusal
+   - a Lab Member can't create `conform_run_data` for an operation they can't edit (the generated rows)
+   - the folder row exists
+   - a CF operation is re-adopted
+5. **d1-report:**
+   - Show "Conform log not visible to you" only when the asset read is forbidden.
+   - A window with fewer than 2 rows says "Run window too short to plot".
+   - Use the shared formats above.
+   - Move `conformAppendix` and its CSV reader to `src/conform.js`.
+6. **Docs:**
+   - `docs/adr/0011-row-level-visibility.md`: logs are lab-wide, runs are private.
+   - Spec "Access": replace the "readers of any linked run" rule.
+   - `docs/data-dictionary.md`.
+   - The backlog: C1 says the file lands in "Conform Logs" and compares the energy of the real TiSwarf log with the spreadsheet; CFS3 is reworded for a file-level 403.
+
+### F2 tasks (browser code, panels, fixture swap)
+
+1. **Fixture swap.**
+   - Every test that used `tiswarf-excerpt.csv` now uses `synthetic-log.csv`, with expected values from `synthetic-log.expected.json`:
+     - energy motor 6.112229, ips 1.411225, cooling 0.000416, total 7.523869
+     - extruding 870 s
+     - means 4.628926 rpm, 17.904279 %, 367.3525 °C
+     - peaks 22.0 %, 51.4 A, 430.355 °C, 96.93 °C
+     - steps 84/208/602 rows at 3/4/5 rpm, starting 10:00:00, 10:01:28 and 10:04:58 UTC
+     - step 2 tooling 1 range 312.76–342.775, mean torque 18.012487, energy 1.776252
+     - sub-window from row 298 to the end: 5.118654 kWh
+   - Tooling 2 is flat. `tooling1_c` is not flat.
+   - Delete `tiswarf-excerpt.csv`.
+   - The Excel-variant test builds from the synthetic text.
+2. **Encoding.**
+   - Read uploads as an `ArrayBuffer`. Decode with `TextDecoder('utf-8', {fatal: true})`, falling back to `windows-1252`. Do this in one helper, `decodeLogBytes(buf): string`, in `conform/parse.ts`, and use it in both upload paths.
+   - `cleanHeader` also maps `�` before `C` to `°`.
+   - Tests: a header encoded in latin1 gives the same channel keys; a UTF-8 file round-trips.
+   - The SHA-256 is computed over the same bytes.
+3. **Duplicate check.** `findLogByHash(api, sha256)`; the upload helpers use it before `POST /files` and return `{ existing: ConformLogRow }` so the UI can offer to link it. Map the unique error as in the contract.
+4. **Bands from `run_windows`.** `listLogWindows` reads it. Labels: readable runs by feedstock or code, otherwise "Other run".
+   - The Operation page lists the other windows on its log, with the times.
+   - When linking a log that already has windows, show them, with the note "The whole log is <label>'s window: narrow that run's window first" when one window covers the whole log.
+5. **Edit gating.**
+   - The plotter's upload, link, window and unlink actions appear only when the caller can edit the operation. Use the same rights check as the Operation page's `canEdit`; share it rather than copying it.
+   - The Operation page already gates. Make sure it still does.
+6. **Unlink and replace.**
+   - "Unlink log" sets the run to `log_id null, window null, summary null, steps null, status 'no_log'`. If the caller uploaded the log and no other run uses it (its `run_windows` is empty and no other row references it), delete the log and then its file, best effort.
+   - "Replace log" is unlink followed by the upload/link picker.
+   - Both appear on the Operation page and in the plotter.
+7. **Window entry.**
+   - A field the user didn't edit keeps its stored instant; no truncation to the second.
+   - An edited value is clamped to `[log_start, log_end]`, with a note when it was clamped.
+   - "Set run window" stays mounted during the reload (focus kept).
+8. **Planned runs.** Uploading or linking to a run whose `work_state` is planned never writes `operation_date`.
+9. **Recompute.** Write `summary.constants_version`. "Recompute" shows when it is missing or lower than `CONFORM_POWER_CONSTANTS.version`. Remove the `conform_logs` PATCH from `recomputeRun`.
+10. **Thumbnails.** `loadTrace` caches the pending promise, so concurrent loads of one log download once. Add a test.
+11. **Hidden file.** A 403 on `/assets` for the log's file shows "Conform log not visible to you" in the plotter, the Operation page and the map preview. Other failures say "Could not load the Conform log".
+12. **New from and Duplicate.** Add `conform_feed_mass_g`, `conform_extrusion_length_mm`, `conform_extrusion_mass_g`, `conform_yield_pct` and `conform_flash_mass_g` to `NEW_FROM_DROPS`.
+13. **Dedupe.**
+    - Share one `ConformRunBundle` type.
+    - "Use a log already uploaded" with no run date searches around today in both places, with the same wording.
+    - Use one UK-time module: `fast-plotting/src/conform/clock.ts` gains what `d1-ui/src/ukTime.ts` has, and d1-ui re-exports or uses it if the package dependency direction allows; otherwise keep both but test them against the same cases.
+    - The shared formats from the contract live in `conform/format.ts`, used everywhere.
+    - Fix the stale comment at `packages/d1-ui/src/process.ts:26`.
+14. **Lab stats.** `LabStats.vue` stops counting Conform runs as "Machining". Count them under their own label, or leave them out of that split with a test.
+15. **Folder id.** Use `CONFORM_LOGS_FOLDER_ID` from the contract, and remove the lookup by name.
