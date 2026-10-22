@@ -48,7 +48,16 @@ describe('AddSearch', () => {
 	it('unconnected is the whole catalog: the samples first, then the operations by category, then the tests', async () => {
 		const t = text(await render({ ...base, target: { sock: null, at: { x: 0, y: 0 } } }));
 		expect(t).toContain('Existing sample…');
-		expect(t).toContain('New sample');
+		// A new sample is the "Sample" kind: the catalog's "New sample" is not listed beside it.
+		expect(t).not.toContain('New sample');
+	});
+
+	it('unconnected lists the kinds first, and every method and test type after them', async () => {
+		const t = text(await render({ ...base, target: { sock: null, at: { x: 0, y: 0 } } }));
+		for (const word of ['Sample', 'Operation', 'Test', 'From database…', 'Turning', 'FAST sintering', 'Tensile']) expect(t).toContain(word);
+		expect(t.indexOf('choose the kind on the card')).toBeLessThan(t.indexOf('Turning'));
+		expect(t.indexOf('choose the type on the card')).toBeLessThan(t.indexOf('Tensile'));
+		expect(t.match(/From database…/g)).toHaveLength(1);
 	});
 
 	it('opened on an operation\'s output offers the sample choices, Same sample greyed with its reason when nothing feeds it', async () => {

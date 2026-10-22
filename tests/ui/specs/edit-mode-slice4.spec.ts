@@ -1,7 +1,7 @@
 import { test, expect, type APIRequestContext, type Locator, type Page } from '@playwright/test';
 import { D1, STAR, apiAs, getRetrying, listRecords, readRecord, signIn, signInWith, stackAvailable } from '../starbase/localStack';
 import {
-	addSearch, boxOf, canvasMiddle, card, cards, centreOf, canvasOf, createButton, dragBetween, dragEntryTo, emptySpot, fit, openAddSearch, openNewDraft, paletteEntry, paletteOf, pickSamples, pressCreate,
+	addSearch, boxOf, canvasMiddle, card, cards, centreOf, canvasOf, createButton, dragBetween, dragEntryTo, emptySpot, fit, openAddSearch, openNewDraft, paletteEntry, paletteFind, paletteKind, paletteOf, pickSamples, pressCreate,
 	readDraft, draftIdOf, sampleIdOf, savedDraft, searchOptions, secondMember, selectCard, sockOf, startEditingMapOf, distinctRecords, chooseFromSocketMenu, wireBetween, wireMidpoint, settledOverlaps,
 	type DraftBody, type Ref,
 } from '../starbase/mapEdit';
@@ -117,7 +117,7 @@ async function pick(all: Locator, label: string, query: string, option: RegExp |
 /** A CNC Turning from the palette onto the empty middle of the canvas, selected, with its "all fields" open. Returns its saved draft key. */
 async function dropTurning(page: Page, api: APIRequestContext, where?: { x: number; y: number }): Promise<void> {
 	const before = (await readDraft(api, draftIdOf(page))).items.length;
-	await dragEntryTo(page, paletteEntry(page, /^CNC Turning/), where ?? (await canvasMiddle(page)));
+	await dragEntryTo(page, await paletteFind(page, 'CNC Turning'), where ?? (await canvasMiddle(page)));
 	await savedDraft(page, api, (b) => b.items.length === before + 1, 'the CNC Turning dropped');
 }
 async function selectOperation(page: Page): Promise<void> {
@@ -191,11 +191,10 @@ test.describe('as a Lab Member', () => {
 		expect(typeof stored?.values.method_id).toBe('string');
 		for (const f of ['planned_date', 'operation_date', 'outcome_notes', 'sample_id', 'output_sample_id', 'work_state', 'owner_person_id', 'project_id']) expect(stored?.values, `no ${f} in a template`).not.toHaveProperty(f);
 
-		// The palette says so and lists it first, above the samples; folded it opens.
+		// The palette says so and lists it right after the four kinds (Sample, Operation, Test, From database…); folded it opens.
 		await expect(page.locator('[data-template-notice]')).toContainText(`Saved the template ${nm('Round')}.`);
-		const sections = paletteOf(page).locator('.sec');
-		await expect(sections.first()).toHaveText('Templates');
-		await expect(paletteOf(page).locator('.pe').first()).toContainText(nm('Round'));
+		await expect(paletteOf(page).locator('.sec').filter({ hasText: 'Templates' })).toBeVisible();
+		await expect(paletteOf(page).locator('.pe').nth(4)).toContainText(nm('Round'));
 		await expect(paletteEntry(page, nm('Round'))).toContainText('CNC Turning');
 
 		// The add search lists it first too, and finds it by its name and by its method.
@@ -263,15 +262,16 @@ test.describe('as a Lab Member', () => {
 		await selectOperation(page);
 		await page.keyboard.press('Delete');
 		// (the tests are at the bottom of the dock's list: scrolled to before the pointer goes there)
-		await paletteEntry(page, /Destructive — Tensile/).scrollIntoViewIfNeeded();
-		await dragEntryTo(page, paletteEntry(page, /Destructive — Tensile/), await canvasMiddle(page));
+		// (a test type is found by typing in the palette)
+		await dragEntryTo(page, await paletteFind(page, 'Destructive — Tensile'), await canvasMiddle(page));
 		await savedDraft(page, member, (b) => b.items.length === 1 && b.items[0].kind === 'test', 'a tensile test on the canvas');
 		await selectCard(page, cards(page).filter({ hasText: /Tensile/i }).first());
 		await page.getByRole('button', { name: /^Save as template/ }).click();
 		await expect(dialogOf(page)).toHaveAccessibleName('Save this test as a template');
 		const test1 = await saveAsTemplate(page, nm('Pull'), /^Everyone/, { opened: true });
 		expect(test1).toMatchObject({ scope: 'global', collection: 'test_sessions', values: { test_type: 'tensile' } });
-		await expect(paletteOf(page).locator('.pe').first()).toContainText(nm('Pull'));
+		await paletteKind(page, 'sample'); // clears the search box: the palette lists the kinds, then the templates
+		await expect(paletteOf(page).locator('.pe').nth(4)).toContainText(nm('Pull'));
 	});
 
 	test('the card\'s right-click menu saves a recorded container as a template: it is read first, and nothing of its run travels (R7)', async ({ page }) => {
@@ -439,8 +439,8 @@ test.describe('as a Lab Member', () => {
 			await expect(paletteEntry(page2, nm('Role'))).toBeVisible();
 			await expect(paletteEntry(page2, nm('Everyone'))).toBeVisible();
 			await expect(paletteEntry(page2, nm('Private'))).toHaveCount(0);
-			await expect(paletteOf(page2).locator('.sec').first()).toHaveText('Templates');
-			await expect(entries.first()).toContainText('PM4 ');
+			await expect(paletteOf(page2).locator('.sec').filter({ hasText: 'Templates' })).toBeVisible();
+			await expect(entries.nth(4)).toContainText('PM4 ');
 			await expect(paletteOf(page2).getByRole('button', { name: /Manage the template/ })).toHaveCount(0);
 			// And what they add from it is theirs.
 			await dragEntryTo(page2, paletteEntry(page2, nm('Everyone')), await canvasMiddle(page2));

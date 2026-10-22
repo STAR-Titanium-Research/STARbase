@@ -6,9 +6,11 @@ import { rowRecordId, type EndSide, type SocketRef } from '../edit/socketRefs';
 import type { ContainerNode } from '../model/types';
 import { railSockets, socketOwners, SHOWN_WHEN_FOLDED, type RailSocketModel } from '../model/railSockets';
 import { isBundleSocket } from '../model/sockets';
-import { activating, cardHandlers, editSocketProps, freeSocketLabel, stopping, useExpanded, useHiddenSides, useMapActions, useMapEdit, useMapView, useSelected, useSocketBinder } from './actions';
+import { activating, badgeText, cardHandlers, editSocketProps, freeSocketLabel, stopping, useExpanded, useHiddenSides, useMapActions, useMapEdit, useMapView, useSelected, useSocketBinder } from './actions';
 import { edgeStyle, handlePosition } from './handle';
 import { KINDS, kindVar, statusKindOf } from './kinds';
+import CardFields from '../edit/CardFields.vue';
+import KindPicker from '../edit/KindPicker.vue';
 import HiddenPill from './HiddenPill.vue';
 import SlotRow from './SlotRow.vue';
 
@@ -30,12 +32,12 @@ const selected = useSelected(() => props.id);
 const FOLD_ABOVE = 3;
 
 const style = computed(() => KINDS[props.data.kind]);
-/** The title bar: the process, then the method ("Machining | Turning"); a test, "Test | Tensile". */
+/** The title bar: the process, then the method ("Machining · Turning"); a test, "Test · Tensile". While the kind dropdown shows it says the method already: the bar is the process only. */
 const kindLine = computed(() => {
 	const d = props.data;
 	const process = d.kind === 'test' ? 'Test' : processLabel(d.category === 'test' ? null : d.category);
 	const method = d.method ?? (d.kind === 'test' ? '' : d.title);
-	return method && method.toLowerCase() !== process.toLowerCase() ? `${process} | ${method}` : process;
+	return method && !kindPick.value && method.toLowerCase() !== process.toLowerCase() ? `${process} · ${method}` : process;
 });
 /**
  * The step's own name in the card: its code (the full operation name) for a single row; a batch or a stack says
@@ -73,8 +75,18 @@ const railRef = (socket: string, side: EndSide): SocketRef | null => {
 	return owner && owner.side === side ? rowRef(owner.recordId, side) : null;
 };
 const freeProps = (recordId: string | null, side: EndSide, add?: true) => (edit && editable.value && recordId !== null ? editSocketProps(edit, { ...rowRef(recordId, side), ...(add ? { add } : {}) }) : {});
+/** A new operation or test says what kind it is with a dropdown under its header (K3); a recorded one, or a card nobody can edit, has none. */
+const kindPick = computed(() => (editable.value ? (edit?.kind?.(props.data) ?? null) : null));
 const what = computed(() => props.data.code || props.data.title);
+/** The step's name line says nothing new when it only repeats the method the dropdown above it shows. */
+const nameRepeatsKind = computed(() => !!kindPick.value && name.value.toLowerCase() === (props.data.method ?? props.data.title).toLowerCase());
 const badge = computed(() => (edit?.editing.value ? edit.badge(props.data) : null));
+/** A new operation or test whose kind is chosen types its machine, date and key settings on the card (K4); with them the Inside tray and the settings list would only say them again. */
+const cardItem = computed(() => (editable.value ? (edit?.fieldsOf?.(props.data) ?? null) : null));
+/** The fields the card draws: none until the form's definitions are read, when the card has nothing to say "ready" over. */
+const onCard = computed(() => (cardItem.value ? (edit?.fieldNames?.(props.data) ?? []) : []));
+/** Nothing is missing on a card that draws its fields: it says so (K8). */
+const ready = computed(() => !badge.value && onCard.value.length > 0);
 /** Why the selected card cannot be removed (a done record), shown with a lock: "Done records can't be removed from the map". */
 const lock = computed(() => (selected.value && edit?.editing.value ? edit.lockOf(props.data) : null));
 /** Planned or done at Create (R9): a new operation or test wears a chip that says which, and flips it. */
@@ -115,8 +127,10 @@ const summary = computed(() => {
 const railToggle = computed(() => (hidden.value.length ? `+${hidden.value.length} more` : canFold.value ? 'fold' : null));
 
 const collapsedIn = computed(() => (props.data.collapsed ? (props.data.rows[0]?.in ?? null) : null));
-const majors = computed(() => props.data.slots.filter((s) => s.major));
-const minors = computed(() => props.data.slots.filter((s) => !s.major));
+/** What the Inside tray shows: every relation, but the ones the card types itself (the machine), which it would only repeat. */
+const traySlots = computed(() => props.data.slots.filter((s) => !onCard.value.includes(s.field)));
+const majors = computed(() => traySlots.value.filter((s) => s.major));
+const minors = computed(() => traySlots.value.filter((s) => !s.major));
 const moreShown = computed(() => moreOpen.value.has(props.id));
 const moreText = computed(() => (moreShown.value ? 'Show fewer' : `+${minors.value.length} more from the form`));
 
@@ -162,12 +176,14 @@ const outPos = computed(() => handlePosition(direction.value, 'out'));
 			<span v-if="data.stacked" class="deck" :title="`${data.group.rowIds.length} passes stacked`">×{{ data.group.rowIds.length }}</span>
 			<button v-if="work" type="button" class="wchip nodrag nopan" :class="work.state" :aria-label="work.label" :title="work.label" :data-work="work.state" @click="flip" @keydown.stop>{{ work.state === 'done' ? 'Done' : 'Planned' }}</button>
 			<span v-if="lock" class="lock" role="img" :aria-label="lock" :title="lock"><v-icon name="lock" x-small /></span>
-			<span v-if="badge" class="chk" :class="{ warn: badge.level === 'warn' }" role="img" :aria-label="badge.text" :title="badge.text">{{ badge.count }}</span>
+			<span v-if="badge" class="chk" :class="badge.level" role="img" :aria-label="badge.text" :title="badge.text">{{ badgeText(badge) }}</span>
+			<span v-else-if="ready" class="chk ready" role="img" aria-label="Nothing is missing" title="Nothing is missing">ready</span>
 			<button v-if="!data.draft" class="xbtn nodrag nopan" :class="{ quiet: !open }" type="button" :aria-label="open ? 'Collapse' : 'Expand'" @click="card.expand"><v-icon :name="open ? 'remove' : 'add'" x-small /></button>
 		</div>
+		<KindPicker v-if="kindPick" :kind="kindPick.kind" :value="kindPick.value" :methods="kindPick.methods" :test-types="kindPick.testTypes" @choose="kindPick.choose" />
 		<div class="oname">
 			<div class="nl">
-				<span class="n" :class="{ code: name === data.code }">{{ name }}</span>
+				<span v-if="!nameRepeatsKind" class="n" :class="{ code: name === data.code }">{{ name }}</span>
 				<StatusBadge class="st" :kind="statusKindOf(data.kind)" :value="data.status" />
 			</div>
 			<span v-if="data.when || (data.collapsed && data.meta)" class="d">{{ data.when ?? data.meta }}</span>
@@ -222,7 +238,9 @@ const outPos = computed(() => handlePosition(direction.value, 'out'));
 			</template>
 		</div>
 
-		<div v-if="data.slots.length && !data.collapsed" class="slots" @click.stop>
+		<CardFields v-if="cardItem" :item="cardItem" @grew="edit?.grew?.(id)" />
+
+		<div v-if="traySlots.length && !data.collapsed" class="slots" @click.stop>
 			<SlotRow v-for="s in majors" :key="s.field" :item="s" />
 			<template v-if="moreShown">
 				<SlotRow v-for="s in minors" :key="s.field" :item="s" />
@@ -232,7 +250,7 @@ const outPos = computed(() => handlePosition(direction.value, 'out'));
 			</div>
 		</div>
 
-		<dl v-if="data.settings.length && !data.collapsed" class="params">
+		<dl v-if="data.settings.length && !data.collapsed && !onCard.length" class="params">
 			<div v-for="s in data.settings" :key="s.label">
 				<dt>{{ s.label }}</dt>
 				<dd>{{ s.value }}</dd>
@@ -253,7 +271,8 @@ const outPos = computed(() => handlePosition(direction.value, 'out'));
 	background: color-mix(in srgb, var(--k) 16%, var(--d1-surface));
 	border-bottom: 1px solid color-mix(in srgb, var(--k) 30%, var(--d1-line));
 }
-.m { font-weight: 700; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+/* The title is never cut short: it wraps inside its own column while the chips keep theirs. */
+.m { font-weight: 700; min-width: 0; white-space: normal; overflow-wrap: anywhere; }
 .deck { font-size: var(--fs-xs, 11px); font-weight: 700; padding: 1px 7px; border-radius: 99px; background: color-mix(in srgb, var(--k) 22%, var(--d1-surface)); font-variant-numeric: tabular-nums; }
 .apill { font-size: var(--fs-xs, 11px); font-weight: 700; padding: 1px 7px; border-radius: 99px; border: 1px solid var(--d1-accent, var(--theme--primary)); color: var(--d1-accent, var(--theme--primary)); }
 .m + .xbtn, .deck + .xbtn, .apill + .xbtn { margin-left: auto; }

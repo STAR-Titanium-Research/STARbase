@@ -20,6 +20,8 @@ const props = defineProps<{
 	readonly?: boolean;
 	/** Every required field that is empty is marked, not only the ones the person has been into. */
 	showMissing?: boolean;
+	/** Fields to mark as still to fill in (the row gets class `flag`): what a caller's own checks say is missing. */
+	flagged?: ReadonlySet<string>;
 	touched: ReadonlySet<string>;
 	idPrefix: string;
 	level: number;
@@ -48,7 +50,8 @@ const noteId = computed(() => `${inputId.value}-note`);
 const msgId = computed(() => `${inputId.value}-msg`);
 const typedProblem = ref<string | null>(null);
 const problem = computed(() => typedProblem.value ?? (field.value.kind === 'number' ? inputProblem(field.value, inputText(field.value, value.value)) : null));
-const message = computed(() => (missing.value ? 'Required.' : (problem.value ?? '')));
+const flag = computed(() => !!props.flagged?.has(field.value.field));
+const message = computed(() => (missing.value ? 'Required.' : (problem.value ?? (flag.value ? 'Missing.' : ''))));
 const describedby = computed(() => (field.value.note ? `${noteId.value} ${msgId.value}` : msgId.value));
 const full = computed(() => field.value.width === 'full' || field.value.kind === 'textarea' || field.value.kind === 'radio');
 </script>
@@ -66,6 +69,7 @@ const full = computed(() => field.value.width === 'full' || field.value.kind ===
 					:inherited="inherited"
 					:readonly="readonly"
 					:show-missing="showMissing"
+					:flagged="flagged"
 					:touched="touched"
 					:id-prefix="idPrefix"
 					:level="level + 1"
@@ -87,6 +91,7 @@ const full = computed(() => field.value.width === 'full' || field.value.kind ===
 					:inherited="inherited"
 					:readonly="readonly"
 					:show-missing="showMissing"
+					:flagged="flagged"
 					:touched="touched"
 					:id-prefix="idPrefix"
 					:level="level + 1"
@@ -96,10 +101,10 @@ const full = computed(() => field.value.width === 'full' || field.value.kind ===
 				/>
 			</div>
 		</div>
-		<div v-else class="row" :class="{ full, inherited: isInherited, missing }" :data-field="field.field">
+		<div v-else class="row" :class="{ full, inherited: isInherited, missing, flag }" :data-field="field.field">
 			<label :for="field.kind === 'external' ? undefined : inputId" class="lab">
 				<span>{{ field.label }}</span>
-				<abbr v-if="view?.required" class="req" title="Required" aria-label="required">*</abbr>
+				<abbr v-if="view?.required || flag" class="req" :title="view?.required ? 'Required' : 'Missing'" :aria-label="view?.required ? 'required' : 'missing'">*</abbr>
 				<span v-if="isInherited" class="tag" title="Taken from the record this belongs to; type to use another value.">inherited</span>
 			</label>
 			<FieldInput

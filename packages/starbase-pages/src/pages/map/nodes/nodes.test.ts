@@ -753,17 +753,17 @@ describe('card tweaks: title bar, name line, stacks, chips, ＋/−', () => {
 	const turning = (p: Parameters<typeof mkOp>[0] = {}) =>
 		mkOp({ code: '10-AA-MF-2023-03-31-F1-30MPM_0.05feed_0.1DoC', sampleId: 'p', outputSampleId: 'p', methodName: 'Turning', category: 'machining', date: DAY, ...p });
 
-	it('the title bar says process | method; the full operation name and its date are in the card', async () => {
+	it('the title bar says process · method; the full operation name and its date are in the card', async () => {
 		const [c] = containers(mkData({ samples: sam('p'), operations: [turning({ id: 'o1' })] }));
 		const html = await render(ContainerNode, { id: c.id, data: c });
-		expect(/<span class="m"[^>]*>([^<]*)</.exec(html)?.[1]).toBe('Machining | Turning');
+		expect(/<span class="m"[^>]*>([^<]*)</.exec(html)?.[1]).toBe('Machining · Turning');
 		expect(html).toMatch(/class="code n"[^>]*>10-AA-MF-2023-03-31-F1-30MPM_0\.05feed_0\.1DoC</);
 		expect(text(html)).toContain('1 Sept 2026');
 	});
 
-	it('a test says Test | its type', async () => {
+	it('a test says Test · its type', async () => {
 		const [c] = containers(mkData({ samples: sam('s1'), tests: [mkTest({ id: 't1', subjectSampleIds: ['s1'], testType: 'Tensile' })] }));
-		expect(/<span class="m"[^>]*>([^<]*)</.exec(await render(ContainerNode, { id: c.id, data: c }))?.[1]).toBe('Test | Tensile');
+		expect(/<span class="m"[^>]*>([^<]*)</.exec(await render(ContainerNode, { id: c.id, data: c }))?.[1]).toBe('Test · Tensile');
 	});
 
 	it('a stack is a deck: ×N in the title bar, "N passes", and Unstack', async () => {

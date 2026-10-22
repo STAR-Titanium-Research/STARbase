@@ -63,6 +63,18 @@ describe('the add search\'s state', () => {
 		expect(edit.body.value.items).toHaveLength(0);
 	});
 
+	it('gives the keys of the cards a choice added, and none when it did nothing or opened a picker', async () => {
+		const { menu, edit } = await setup();
+		const t: MenuTarget = { sock: null, at: { x: 300, y: 200 } };
+		expect(await menu.applyAt(t, { kind: 'operation', methodId: 'm-turn', category: 'machining' })).toEqual(['n1']);
+		expect(await menu.applyAt(t, { kind: 'pickSamples' })).toEqual([]);
+		expect(await menu.applyAt({ sock: { kind: 'sample', id: 'draft:zz', side: 'out' }, at: t.at }, { kind: 'newSample' })).toEqual([]);
+		// A socket's own sample is not what was added: only the card made on it is.
+		const sock = { kind: 'sample', id: 's1', side: 'out' } as const;
+		expect(await menu.applyAt({ sock, at: t.at, anchor: 'card' }, { kind: 'operation', methodId: 'm-turn', category: 'machining' })).toEqual([edit.body.value.items.at(-1)!.key]);
+		expect(edit.body.value.items.filter((i) => i.kind === 'sample')).toHaveLength(1);
+	});
+
 	it('Existing sample… of the catalog opens the picker instead', async () => {
 		const { menu, picked, edit } = await setup();
 		menu.open({ sock: null, at: { x: 300, y: 200 } });
@@ -184,12 +196,14 @@ describe('the add search remembers what was added, and does a choice wherever it
 	});
 	afterEach(() => void vi.unstubAllGlobals());
 
-	it('a method, a test type and a new sample go to the front of the recents, for this person only', async () => {
+	it('a method and a test type go to the front of the recents, for this person only; a new sample is not one', async () => {
 		const { menu } = await setup();
 		menu.open({ sock: null, at: { x: 300, y: 200 } });
 		await menu.choose({ kind: 'operation', methodId: 'm-turn', category: 'machining' });
 		menu.open({ sock: null, at: { x: 300, y: 200 } });
 		await menu.choose({ kind: 'test', testType: 'tensile' });
+		menu.open({ sock: null, at: { x: 300, y: 200 } });
+		await menu.choose({ kind: 'newSample' });
 		expect(menu.recents.value).toEqual(['test:tensile', 'op:m-turn']);
 		expect(JSON.parse(store.get('d1.map.add.recent.v1.u-test')!)).toEqual(['test:tensile', 'op:m-turn']);
 		// Opening again reads them: a second visit starts with them.
@@ -247,6 +261,16 @@ describe('the add search remembers what was added, and does a choice wherever it
 		await menu.choose({ kind: 'operation', methodId: 'm-turn', category: 'machining' });
 		expect(insert).toHaveBeenCalledWith(expect.objectContaining({ insert: t.insert }), { kind: 'operation', methodId: 'm-turn', category: 'machining' });
 		expect(edit.body.value.items).toHaveLength(0);
+	});
+
+	it('gives the keys an insert added (the page shows the first), and none for a refused one', async () => {
+		const { menu, insert } = await setup();
+		const t: MenuTarget = { sock: null, at: { x: 5, y: 5 }, insert: { where: 'after', nodeId: 's:x', what: 'S-1' } };
+		const turning = { kind: 'operation', methodId: 'm-turn', category: 'machining' } as const;
+		insert.mockResolvedValueOnce(['n7', 'n8']);
+		expect(await menu.applyAt(t, turning)).toEqual(['n7', 'n8']);
+		insert.mockResolvedValueOnce(false);
+		expect(await menu.applyAt(t, turning)).toEqual([]);
 	});
 
 	it('a choice that did nothing is not a recent: a drop on a socket the draft cannot build on, an insert that was refused', async () => {

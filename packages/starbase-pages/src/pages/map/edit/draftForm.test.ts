@@ -54,9 +54,12 @@ describe('formDefsFor', () => {
 		expect(names(formDefsFor(all, op()))).not.toContain('pass_code');
 	});
 
-	it('compact keeps only the key fields, in the form order', () => {
+	it('compact keeps only the key fields, in the order they are asked for (the sample card: its name first)', () => {
 		const list = defs('a', 'b', 'c', 'sample_id');
-		expect(names(formDefsFor(list, op(), { compact: true, keyFields: ['c', 'a', 'sample_id'] }))).toEqual(['a', 'c']);
+		expect(names(formDefsFor(list, op(), { compact: true, keyFields: ['c', 'a', 'sample_id'] }))).toEqual(['c', 'a']);
+		// A sample's collection lists the name after the material and the form; the card draws it first (K6).
+		const sampleDefs = defs('material_id', 'form', 'nickname', 'primary_method_id', 'notes');
+		expect(names(formDefsFor(sampleDefs, sample(), { compact: true, keyFields: ['nickname', 'material_id', 'form', 'primary_method_id'] }))).toEqual(['nickname', 'material_id', 'form', 'primary_method_id']);
 		expect(formDefsFor(list, op(), { compact: true })).toEqual([]);
 		expect(names(formDefsFor(list, op(), { keyFields: ['a'] }))).toEqual(['a', 'b', 'c']); // keyFields alone does nothing
 	});

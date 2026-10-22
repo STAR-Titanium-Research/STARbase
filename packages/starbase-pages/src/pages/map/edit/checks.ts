@@ -62,7 +62,7 @@ const BY_THE_DRAFT = new Set([
 
 const empty = (v: unknown) => v === undefined || v === null || v === '' || (Array.isArray(v) && v.length === 0);
 
-const block = (key: DraftKey, text: string, field?: string): Check => ({ key, ...(field ? { field } : {}), level: 'block', text });
+const block = (key: DraftKey, text: string, field?: string, code?: string): Check => ({ key, ...(field ? { field } : {}), level: 'block', text, ...(code ? { code } : {}) });
 const warn = (key: DraftKey, text: string, field?: string): Check => ({ key, ...(field ? { field } : {}), level: 'warn', text });
 
 function loadedOf(item: DraftItem, ctx: CheckCtx): LoadedRecord | null | undefined {
@@ -172,7 +172,7 @@ function operationChecks(item: DraftOperation, body: DraftBody, ctx: CheckCtx): 
 	if (item.remove) return removeChecks(item, ctx);
 	const out: Check[] = [];
 	const values = merged(item, ctx);
-	if (empty(values.method_id) && known(item, 'method_id', ctx)) out.push(block(item.key, 'Choose the method of this operation.', 'method_id'));
+	if (empty(values.method_id) && known(item, 'method_id', ctx)) out.push(block(item.key, 'Choose what kind of operation this is.', 'method_id'));
 	item.rows.forEach((_, row) => {
 		const label = item.rows.length > 1 ? `Piece ${row + 1} of this operation` : 'This operation';
 		const input = inputSampleOf(body, { key: item.key, row });
@@ -185,12 +185,13 @@ function operationChecks(item: DraftOperation, body: DraftBody, ctx: CheckCtx): 
 		}
 	});
 	// An attached operation is given an input at Create; it cannot be the sample it made (the genealogy trigger skips that row, so the record would
-	// read as in-place work on it). d1-build refuses the same, and the lineage loops only it can see.
+	// read as in-place work on it). d1-build refuses the same, and the lineage loops only it can see. It carries d1-build's code for it
+	// (SERVER_ONLY_CODES), so the card says "refused" in red: nothing on the card can be filled in to clear it, only the wire taken off.
 	if (item.attach && item.existing) {
 		const made = loadedOf(item, ctx)?.values.output_sample_id;
 		const into = itemOf(body, inputSampleOf(body, { key: item.key, row: 0 }) ?? '');
 		if (typeof made === 'string' && into?.kind === 'sample' && into.existing && into.existing.id.toLowerCase() === made.toLowerCase()) {
-			out.push(block(item.key, 'The sample this operation made cannot be an input of it. Take the wire off.'));
+			out.push(block(item.key, 'The sample this operation made cannot be an input of it. Take the wire off.', undefined, 'NOT_ATTACHABLE'));
 		}
 	}
 	const planned = item.workState === 'planned';
@@ -272,12 +273,6 @@ export const warnings = (list: Check[]): Check[] => list.filter((c) => c.level =
 
 /** The checks of one card, for its badge. */
 export const checksFor = (list: Check[], key: DraftKey): Check[] => list.filter((c) => c.key === key);
-
-/** "3 things missing" on the Create button; '' when nothing blocks. */
-export function missingText(list: Check[]): string {
-	const n = blocking(list).length;
-	return n ? `${n} ${n === 1 ? 'thing' : 'things'} missing` : '';
-}
 
 /** Two lists of checks as one, without the same message twice (the client's and the server's last answer). */
 export function mergeChecks(...lists: Check[][]): Check[] {

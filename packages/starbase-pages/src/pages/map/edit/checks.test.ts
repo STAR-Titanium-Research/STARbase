@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Check, DraftBody } from '@d1/ui';
 import { apply, emptyBody, type DraftAction } from './draft';
-import { blocking, checks, checksFor, doneRequiredFields, mergeChecks, missingText, recordKey, warnings, type CheckCtx, type FieldDef } from './checks';
+import { blocking, checks, checksFor, doneRequiredFields, mergeChecks, recordKey, SERVER_ONLY_CODES, warnings, type CheckCtx, type FieldDef } from './checks';
 
 const run = (actions: DraftAction[], from: DraftBody = emptyBody()) => actions.reduce((b, a) => apply(b, a), from);
 const texts = (list: Check[], key?: string) => list.filter((c) => !key || c.key === key).map((c) => `${c.level}:${c.field ?? '-'}:${c.text}`);
@@ -53,6 +53,7 @@ describe('structure (planned records)', () => {
 	it('an operation without a method blocks', () => {
 		const b = run([{ type: 'addSample', values: { material_id: 'ti', primary_method_id: 'mc' } }, { type: 'addContainer', kind: 'operation', source: { from: 'blank' }, from: { key: 'n1' } }]);
 		expect(blocking(checks(b, ctx)).map((c) => [c.key, c.field])).toEqual([['n2', 'method_id']]);
+		expect(blocking(checks(b, ctx)).map((c) => c.text)).toEqual(['Choose what kind of operation this is.']);
 	});
 
 	it('an operation with neither a sample in nor out blocks, once per piece', () => {
@@ -256,6 +257,10 @@ describe('existing records (E13)', () => {
 		const onto = (id: string) => run([{ type: 'addExistingSamples', samples: [{ id, version: 1 }] }, { type: 'attach', operation: { id: 'op-9', version: 3 }, workState: 'planned', from: { key: 'n1' } }]);
 		const records = (output: string): CheckCtx['records'] => ({ [key]: { version: 3, values: { method_id: 'mc', equipment_id: 'e', output_sample_id: output } } });
 		expect(texts(blocking(checks(onto('S-OUT'), { ...ctx, records: records('s-out') })), 'n2')).toEqual(['block:-:The sample this operation made cannot be an input of it. Take the wire off.']);
+		// It is d1-build's refusal (NOT_ATTACHABLE): the card shows it red, as "refused", and it is nothing to fill in.
+		const wire = blocking(checks(onto('S-OUT'), { ...ctx, records: records('s-out') })).find((c) => c.key === 'n2')!;
+		expect(wire.code).toBe('NOT_ATTACHABLE');
+		expect(SERVER_ONLY_CODES.has(wire.code!)).toBe(true);
 		expect(blocking(checks(onto('other'), { ...ctx, records: records('s-out') }))).toEqual([]);
 		expect(blocking(checks(onto('s-out'), { ...ctx, records: {} }))).toEqual([]);
 	});
@@ -342,13 +347,6 @@ describe('helpers', () => {
 		const levels = checks(b, ctx).map((c) => c.level);
 		expect(levels).toEqual([...levels].sort((a, c) => (a === c ? 0 : a === 'block' ? -1 : 1)));
 		expect(levels[0]).toBe('block');
-	});
-
-	it('missingText counts the blocking ones', () => {
-		expect(missingText([])).toBe('');
-		expect(missingText([{ key: 'n1', level: 'warn', text: 'x' }])).toBe('');
-		expect(missingText([{ key: 'n1', level: 'block', text: 'x' }])).toBe('1 thing missing');
-		expect(missingText([{ key: 'n1', level: 'block', text: 'x' }, { key: 'n2', level: 'block', text: 'y' }])).toBe('2 things missing');
 	});
 
 	it('mergeChecks drops the same message twice', () => {

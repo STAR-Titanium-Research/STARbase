@@ -208,7 +208,7 @@ test.describe('as a Lab Member', () => {
 		// "Expand" for it, and the card shows its ＋ Expand button.
 		await openNewDraft(page);
 		await page.getByRole('button', { name: /^Add\b/ }).first().click();
-		await page.locator('.pm-addsearch').getByRole('option', { name: /^New sample/ }).click();
+		await page.locator('.pm-addsearch').getByRole('option', { name: /^Sample\b/ }).click();
 		const card = page.getByRole('group', { name: 'New sample, Sample' });
 		await card.focus();
 		await card.press('Enter');
@@ -220,19 +220,21 @@ test.describe('as a Lab Member', () => {
 
 	test('a new sample no operation makes can be Created (spec §3 item 4)', async ({ page }) => {
 		// Spec §3 item 4: `current_status` is required in Directus's field metadata but never drawn on the form, so a new sample
-		// that no operation makes is stuck on "Fill in Status: a new sample needs it." and Create stays at "1 thing missing".
+		// that no operation makes is stuck on "Fill in Status: a new sample needs it." and Create stays at "1 to fill in".
 		await openNewDraft(page);
 		await page.getByRole('button', { name: /^Add\b/ }).first().click();
-		await page.locator('.pm-addsearch').getByRole('option', { name: /^New sample/ }).click();
+		await page.locator('.pm-addsearch').getByRole('option', { name: /^Sample\b/ }).click();
 		const card = page.getByRole('group', { name: 'New sample, Sample' });
 		await card.focus();
 		await card.press('Enter');
 		// Everything the form draws: material, geometry and the manufacturing method (the three parts of the sample's code).
-		await page.getByPlaceholder(/Search materials/).fill('Ti-6Al');
-		await page.getByRole('option', { name: /Ti-6Al-4V Grade 5/ }).click();
-		await page.getByLabel(/^Geometry/).selectOption({ label: 'Cylinder' });
-		await page.getByPlaceholder(/Search manufacturing methods/).fill('Turning');
-		await page.getByRole('option', { name: /CNC Turning/ }).click();
+		// The card draws the same fields, so they are scoped to the rail form (`.pm-item`): unscoped each matches twice (strict mode).
+		const rail = page.locator('.pm-item').first(); // the "key settings" section; "all fields" below it repeats them, collapsed
+		await rail.getByPlaceholder(/Search materials/).fill('Ti-6Al');
+		await rail.getByRole('option', { name: /Ti-6Al-4V Grade 5/ }).click();
+		await rail.getByLabel(/^Geometry/).selectOption({ label: 'Cylinder' });
+		await rail.getByPlaceholder(/Search manufacturing methods/).fill('Turning');
+		await rail.getByRole('option', { name: /CNC Turning/ }).click();
 		await expect(page.getByText('Fill in Status: a new sample needs it.')).toHaveCount(0);
 		await expect(createButton(page)).toHaveText('Create 1 sample');
 		await expect(createButton(page)).toBeEnabled();

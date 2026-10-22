@@ -5,6 +5,8 @@
 
 import { ref, shallowRef, watch, type Ref } from 'vue';
 import type { useMapCanvas } from '../useMapCanvas';
+import type { DraftKey } from '@d1/ui';
+import { newKeys } from './draft';
 import { actionsFor, menuFor, type MenuChoice } from './menuModel';
 import type { MenuTarget } from './menuTarget';
 import { pushRecent, readRecents, recentIdOf } from './recents';
@@ -27,7 +29,7 @@ export function useAddMenu(o: {
 	/** Who is building (the recents are theirs). */
 	person?: () => string | null | undefined;
 	/** A choice made in an "Insert before / after" search: the page decides what it does (insertModel.ts). */
-	insert?: (t: MenuTarget, choice: MenuChoice) => Promise<boolean | void> | boolean | void;
+	insert?: (t: MenuTarget, choice: MenuChoice) => Promise<DraftKey[] | boolean | void> | DraftKey[] | boolean | void;
 }) {
 	const target = shallowRef<MenuTarget | null>(null);
 	/** What this person added lately (entry ids, newest first). Read when the person is known (a moment after the page opens), and again on every open. */
@@ -53,47 +55,66 @@ export function useAddMenu(o: {
 	}
 	const close = (): void => void (target.value = null);
 
-	/** Does a choice at a target: a socket (connected there), the empty canvas (a floating card at `flow`) or an insert. */
-	async function applyAt(t: MenuTarget, choice: MenuChoice): Promise<void> {
-		if (choice.kind === 'pickSamples') return o.pickSamples();
-		if (choice.kind === 'connectTo') return void o.connect(t);
-		if (choice.kind === 'fromDatabase') return void o.attach?.(t);
+	/**
+	 * Does a choice at a target: a socket (connected there), the empty canvas (a floating card at `flow`) or an insert. Gives the keys of the cards
+	 * it added (the page selects and shows the first): none when it did nothing or opened a picker.
+	 */
+	async function applyAt(t: MenuTarget, choice: MenuChoice): Promise<DraftKey[]> {
+		if (choice.kind === 'pickSamples') {
+			o.pickSamples();
+			return [];
+		}
+		if (choice.kind === 'connectTo') {
+			o.connect(t);
+			return [];
+		}
+		if (choice.kind === 'fromDatabase') {
+			o.attach?.(t);
+			return [];
+		}
 		// What was added lately is noted only once the choice did something: a refused drop or insert, or one that changed nothing, is no "recent".
 		const recent = recentIdOf(choice);
 		const note = (): void => void (recent && (recents.value = pushRecent(o.person?.(), recent)));
-		if (t.insert) return void ((await o.insert?.(t, choice)) !== false && note());
+		if (t.insert) {
+			const done = await o.insert?.(t, choice);
+			if (done !== false) note();
+			return Array.isArray(done) ? done : [];
+		}
 		// What the socket is: a sample of the loaded history joins the draft first (with the version it was read at).
 		// The samples it adds and the choice made on them are one undo step.
 		let folded = false;
 		if (t.sock?.kind === 'sample' && !sampleItemOf(o.edit.body.value, t.sock.id)) {
-			if (!(await o.ensureSample(t.sock.id))) return;
+			if (!(await o.ensureSample(t.sock.id))) return [];
 			folded = true;
 		}
+		// The socket's own sample is in the draft by now, so only what the choice itself adds counts as new.
+		const before = o.edit.body.value;
 		let resolved = choice;
 		if (choice.kind === 'record') {
 			const had = !!sampleItemOf(o.edit.body.value, choice.id);
-			if (!(await o.ensureSample(choice.id, { merge: folded }))) return;
+			if (!(await o.ensureSample(choice.id, { merge: folded }))) return [];
 			if (!had) folded = true;
 			const key = sampleItemOf(o.edit.body.value, choice.id)?.key;
-			if (!key) return;
+			if (!key) return [];
 			resolved = { kind: 'wireSample', key };
 		}
 		// A free socket that stands for a new row adds it first, in the same step.
 		const g = t.sock ? grown(o.edit.body.value, t.sock) : { body: o.edit.body.value, action: null };
-		if (!g) return;
+		if (!g) return [];
 		const body = g.body;
 		const f = menuFor(o.edit.body.value, t.sock); // (it reads a socket that adds a row as the body with the row itself)
 		const actions = actionsFor({ body, end: t.sock ? resolveEnd(body, t.sock) : null, side: f.side, card: f.card, at: t.flow }, resolved);
-		if (!actions.length) return;
+		if (!actions.length) return [];
 		o.edit.apply([...(g.action ? [g.action] : []), ...actions], { anchor: t.anchor, merge: folded });
 		note();
+		return newKeys(before, o.edit.body.value);
 	}
 
-	async function choose(choice: MenuChoice): Promise<void> {
+	async function choose(choice: MenuChoice): Promise<DraftKey[]> {
 		const t = target.value;
-		if (!t) return;
+		if (!t) return [];
 		close();
-		await applyAt(t, choice);
+		return applyAt(t, choice);
 	}
 
 	return { target, recents, open, close, choose, applyAt };

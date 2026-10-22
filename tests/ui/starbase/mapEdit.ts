@@ -428,6 +428,24 @@ export async function startEditingMapOf(page: Page, collection: string, id: stri
 export const paletteOf = (page: Page): Locator => page.getByRole('complementary', { name: 'Palette' });
 /** One entry of the palette by its label (the entry's own button). */
 export const paletteEntry = (page: Page, label: string | RegExp): Locator => paletteOf(page).locator('.pe').filter({ hasText: label });
+/** The palette's search box. */
+export const paletteSearch = (page: Page): Locator => paletteOf(page).getByRole('searchbox', { name: 'Search the palette' });
+/** One of the palette's kinds (Sample, Operation, Test). With nothing typed the palette lists them, so the search box is cleared first. */
+export async function paletteKind(page: Page, kind: 'sample' | 'operation' | 'test'): Promise<Locator> {
+	await paletteSearch(page).fill('');
+	return paletteOf(page).locator(`[data-entry="kind:${kind}"]`);
+}
+/** A method, a test type or anything else of the catalog (the palette lists only its kinds and templates until something is typed): found by typing `text` in the search box. */
+export async function paletteFind(page: Page, text: string): Promise<Locator> {
+	await paletteSearch(page).fill(text);
+	return paletteEntry(page, text);
+}
+/** Chooses the kind of operation (or the type of test) of a card, in the select on the card (`[data-kind-select]`, "Kind of operation"). */
+export async function chooseKind(card: Locator, label: string | RegExp): Promise<void> {
+	const select = card.locator('[data-kind-select]');
+	const option = select.locator('option').filter({ hasText: label }).first();
+	await select.selectOption({ label: ((await option.textContent()) ?? '').trim() });
+}
 /** The add search (Shift+A, Ctrl/⌘+K, a socket, Insert before / after): a dialog with a combobox and a listbox of options. */
 export const addSearch = (page: Page): Locator => page.locator('.pm-addsearch');
 /** The labels of the add search's options, in order. */

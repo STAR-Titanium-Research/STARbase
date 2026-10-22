@@ -34,9 +34,11 @@ export function misfit(f: MenuFor, choice: MenuChoice): string | null {
 	const { side, card } = f;
 	switch (choice.kind) {
 		case 'operation':
+		case 'newOperation':
 			if (card === 'sample') return null;
 			return side === 'out' ? 'An operation\'s output takes a sample, not another operation. Drop a New sample on it.' : 'An input takes a sample, not an operation. Drop a New sample on it.';
 		case 'test':
+		case 'newTest':
 			if (side === 'out' && card === 'sample') return null;
 			if (side === 'out' && card === 'test') return 'A test has no output.';
 			if (side === 'in' && card === 'sample') return 'A sample\'s input takes the operation that makes it. A test does not make a sample.';

@@ -2,8 +2,8 @@
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
-/** "3 things missing" on the disabled Create button (the same words as Checks' `missingText`, from a count). */
-export const missingLabel = (n: number): string => `${plural(n, 'thing')} missing`;
+/** "3 to fill in" beside Create, whether it waits or not (K12: the card badges say `3 missing`; the Checks section lists them). */
+export const missingLabel = (n: number): string => `${n} to fill in`;
 
 /** "Created 5 records" in the toast. */
 export const createdText = (count: number): string => `Created ${plural(count, 'record')}`;

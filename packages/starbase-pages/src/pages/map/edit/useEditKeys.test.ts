@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { inOverlay, isTyping, keyDecision, useEditKeys, type EditKeysOptions } from './useEditKeys';
+import { inOverlay, isSelect, isTyping, keyDecision, useEditKeys, type EditKeysOptions } from './useEditKeys';
 
 const free = { typing: false, blocked: false };
 const d = (e: Parameters<typeof keyDecision>[0], state: Partial<Parameters<typeof keyDecision>[1]> = {}) => keyDecision(e, { ...free, ...state });
@@ -80,6 +80,27 @@ describe('edit keys: what each means', () => {
 			expect(keyDecision(e, { typing: false, blocked: true })).toBeNull();
 		}
 	});
+
+	it('a focused select still undoes and redoes, but takes no other key', () => {
+		const sel = { typing: true, select: true };
+		expect(d({ key: 'z', ctrlKey: true }, sel)).toEqual({ do: 'undo' });
+		expect(d({ key: 'z', metaKey: true }, sel)).toEqual({ do: 'undo' });
+		expect(d({ key: 'Z', ctrlKey: true, shiftKey: true }, sel)).toEqual({ do: 'redo' });
+		expect(d({ key: 'Z', metaKey: true, shiftKey: true }, sel)).toEqual({ do: 'redo' });
+		expect(d({ key: 'y', ctrlKey: true }, sel)).toEqual({ do: 'redo' });
+		expect(d({ key: 'Delete' }, sel)).toBeNull();
+		expect(d({ key: 'Backspace' }, sel)).toBeNull();
+		expect(d({ key: 'A', shiftKey: true }, sel)).toBeNull();
+		expect(d({ key: 'ArrowDown' }, sel)).toBeNull();
+		expect(d({ key: 'ArrowLeft' }, sel)).toBeNull();
+		expect(d({ key: 'k', ctrlKey: true }, sel)).toBeNull();
+		expect(d({ key: 'd', ctrlKey: true }, sel)).toBeNull();
+	});
+
+	it('an input keeps its own undo', () => {
+		expect(d({ key: 'z', ctrlKey: true }, { typing: true, select: false })).toBeNull();
+		expect(d({ key: 'z', ctrlKey: true }, { typing: true })).toBeNull();
+	});
 });
 
 describe('keys that are not the canvas\'s', () => {
@@ -115,6 +136,12 @@ describe('what counts as typing', () => {
 		expect(isTyping({ tagName: 'DIV', isContentEditable: true })).toBe(true);
 		expect(isTyping({ tagName: 'BUTTON' })).toBe(false);
 		expect(isTyping(null)).toBe(false);
+	});
+
+	it('knows a select from the other fields', () => {
+		expect(isSelect({ tagName: 'SELECT' })).toBe(true);
+		expect(isSelect({ tagName: 'INPUT' })).toBe(false);
+		expect(isSelect(null)).toBe(false);
 	});
 });
 

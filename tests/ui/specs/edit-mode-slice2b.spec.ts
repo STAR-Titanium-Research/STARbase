@@ -170,7 +170,7 @@ test.describe('as a Lab Member', () => {
 		for (const f of serverFields) expect(clientText, `the page's Checks ask for ${f} as the server does`).toContain(`fill in ${f.replace(/_/g, ' ')}`);
 		expect((clientText.match(/fill in /g) ?? []).length, 'the page asks for neither more nor fewer fields than the server').toBe(serverFields.length);
 		await expect(createButton(page)).toBeDisabled();
-		await expect(createButton(page)).toContainText(/things? missing/);
+		await expect(page.locator('.pm-create .fill')).toContainText(/\d+ to fill in/);
 		// The same fields sit in the rail's key settings; filling them satisfies the page and the server.
 		for (const f of serverFields) {
 			const input = field(page, f);
@@ -200,7 +200,7 @@ test.describe('as a Lab Member', () => {
 		const REASON = 'Its sample is still planned; mark the operation that makes it done first.';
 		await expect(checks(page)).toContainText(REASON);
 		await expect(createButton(page)).toBeDisabled();
-		await expect(createButton(page)).toContainText(/thing/);
+		await expect(page.locator('.pm-create .fill')).toContainText(/to fill in/);
 		const id = draftIdOf(page);
 		await savedDraft(page, member, (b) => b.items.filter((i) => i.kind === 'operation' && i.workState === 'done').length === 1, 'the second operation saved as done');
 		expect((await serverChecks(member, id)).filter((c) => c.level === 'block').map((c) => c.text), 'd1-build gives the same reason').toContain(REASON);
@@ -318,7 +318,7 @@ test.describe('as a Lab Member', () => {
 		await link.click();
 		await page.waitForURL(DRAFT_URL);
 		await expect(page.getByRole('button', { name: /Pick samples/ })).toBeVisible();
-		await page.getByRole('button', { name: /^My drafts/ }).click();
+		await page.getByRole('button', { name: /^Draft/ }).click();
 		const items = page.getByRole('menuitem');
 		await expect(items).toHaveCount(1);
 		await expect(items.first()).toHaveAttribute('aria-current', 'true');
@@ -400,7 +400,7 @@ test.describe('as a Lab Member', () => {
 
 	test('"Open in Data Studio" on a new item\'s field says it opens after Create instead of raising a banner; a record that exists keeps the link (fix 12)', async ({ page }) => {
 		await openNewDraft(page);
-		await addFromLid(page, /^New sample/);
+		await addFromLid(page, /^Sample\b/);
 		await selectCard(page, card(page, 'New sample, Sample'));
 		await page.getByRole('heading', { name: 'New sample: all fields' }).click();
 		const rail = page.locator('section.pm-item').filter({ hasText: 'New sample: all fields' });

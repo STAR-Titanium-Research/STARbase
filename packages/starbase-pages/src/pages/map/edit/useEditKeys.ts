@@ -11,7 +11,8 @@
 // (Enter on a focused socket opens its menu and C on one opens "Connect to…": those are the socket's own keys, useEditCanvas.)
 // Keys are ignored while the person types in a field, while a menu, dialog or the sample picker is open (or the key is pressed inside
 // one: the rail's pickers are listboxes), when something already handled the key, and with a modifier they do not name.
-// A key that has nothing to act on (Delete with nothing selected) is left to the browser.
+// A key that has nothing to act on (Delete with nothing selected) is left to the browser. A focused select (a card's kind, just after an add)
+// still takes Ctrl/⌘+Z and redo: it has no undo of its own.
 
 import { getCurrentInstance, onBeforeUnmount, onMounted } from 'vue';
 
@@ -30,6 +31,8 @@ export interface KeyEvent {
 export interface KeyState {
 	/** A text field (or a select, or something editable) has focus: it takes the key. */
 	typing: boolean;
+	/** The focused element is a select: it has no text undo of its own, so undo and redo still reach the canvas from it. */
+	select?: boolean;
 	/** A menu, dialog, the Finder or the sample picker is open: they have their own keys. */
 	blocked: boolean;
 	/** The key was pressed inside a dialog, listbox or menu (the rail's own pickers among them): it is theirs. */
@@ -37,16 +40,20 @@ export interface KeyState {
 }
 
 export function keyDecision(e: KeyEvent, s: KeyState): EditKeyAction | null {
-	if (s.typing || s.blocked || s.inOverlay || e.defaultPrevented || e.altKey) return null;
+	if (s.blocked || s.inOverlay || e.defaultPrevented || e.altKey) return null;
+	// A field takes its own keys; a select takes none but undo and redo, which it has no text undo of its own to answer.
+	if (s.typing && !s.select) return null;
 	const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
 	if (e.ctrlKey || e.metaKey) {
 		if (key === 'z') return e.shiftKey ? { do: 'redo' } : { do: 'undo' };
 		if (key === 'y' && !e.shiftKey) return { do: 'redo' };
+		if (s.typing) return null;
 		if (key === 'd') return e.shiftKey ? { do: 'duplicateMany' } : { do: 'duplicate' };
 		if (key === 'k' && !e.shiftKey) return { do: 'add' };
 		if ((key === 'Delete' || key === 'Backspace') && !e.shiftKey) return { do: 'dissolve' };
 		return null;
 	}
+	if (s.typing) return null;
 	if (e.shiftKey) {
 		if (key === 'a') return { do: 'add' };
 		if (key === 'd') return { do: 'duplicate' };
@@ -63,6 +70,11 @@ export function isTyping(target: unknown): boolean {
 	const el = target as { tagName?: string; isContentEditable?: boolean } | null;
 	const tag = el?.tagName?.toLowerCase();
 	return tag === 'input' || tag === 'textarea' || tag === 'select' || el?.isContentEditable === true;
+}
+
+/** True when the focused element is a select (it takes typed keys but has no text undo). */
+export function isSelect(target: unknown): boolean {
+	return (target as { tagName?: string } | null)?.tagName === 'SELECT';
 }
 
 /** True when `target` is inside something that has its own keys: a dialog, a listbox or a menu. */
@@ -93,7 +105,7 @@ export interface EditKeysOptions {
 export function useEditKeys(o: EditKeysOptions) {
 	function onKeydown(e: KeyboardEvent): void {
 		if (!o.editing()) return;
-		const d = keyDecision(e, { typing: isTyping(e.target), blocked: o.blocked(), inOverlay: inOverlay(e.target) });
+		const d = keyDecision(e, { typing: isTyping(e.target), select: isSelect(e.target), blocked: o.blocked(), inOverlay: inOverlay(e.target) });
 		if (!d) return;
 		let handled = true;
 		switch (d.do) {
@@ -130,7 +142,7 @@ export function useEditKeys(o: EditKeysOptions) {
 	 */
 	function onSearchKey(e: KeyboardEvent): void {
 		if (!o.editing() || !(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey || e.key.toLowerCase() !== 'k') return;
-		if (keyDecision(e, { typing: isTyping(e.target), blocked: o.blocked(), inOverlay: inOverlay(e.target) })?.do !== 'add') return;
+		if (keyDecision(e, { typing: isTyping(e.target), select: isSelect(e.target), blocked: o.blocked(), inOverlay: inOverlay(e.target) })?.do !== 'add') return;
 		e.preventDefault();
 		e.stopPropagation();
 		o.add(o.pointer());

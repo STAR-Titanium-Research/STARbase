@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { createSSRApp, defineComponent, h } from 'vue';
 import { renderToString } from 'vue/server-renderer';
@@ -15,7 +16,7 @@ async function render(props: Record<string, unknown>, slots: Record<string, () =
 const base = { name: 'S-1 · 2026-10-14', canUndo: false, canRedo: true, drafts: [] };
 
 describe('EditLid', () => {
-	it('has undo, redo, Add with its key, Pick samples, the name and My drafts', async () => {
+	it('has undo, redo, Add with its key, Pick samples, the name and the Draft menu', async () => {
 		const html = await render(base);
 		expect(html).toContain('role="toolbar"');
 		expect(html).toContain('aria-label="Undo"');
@@ -23,14 +24,32 @@ describe('EditLid', () => {
 		expect(html).toContain('Shift+A');
 		expect(html).toContain('Pick samples');
 		expect(html).toContain('value="S-1 · 2026-10-14"');
-		expect(html).toContain('My drafts');
+		expect(html).toContain('aria-haspopup="menu"');
 	});
 
-	it('has a slot for the draft\'s project and campaign, before the saved state', async () => {
+	it('has a slot for the draft\'s project and campaign, in the draft group before the Draft menu', async () => {
 		const html = await render(base, { scope: () => h('span', { class: 'the-scope' }, 'Project and campaign') });
 		expect(html).toContain('the-scope');
-		expect(html.indexOf('the-scope')).toBeLessThan(html.indexOf('Draft kept'));
+		expect(html.indexOf('the-scope')).toBeLessThan(html.indexOf('aria-haspopup="menu"'));
 		expect(await render(base)).not.toContain('the-scope');
+	});
+
+	it('has three groups, left to right: edit tools, the draft, Create', async () => {
+		const html = await render(base, { scope: () => h('span', { class: 'the-scope' }, 'Project and campaign'), create: () => h('button', 'Create') });
+		const parts = html.split('<span class="grp ').slice(1);
+		expect(parts.map((p) => p.match(/^(\w+)" role="group"/)?.[1])).toEqual(['tools', 'draft', 'make']);
+		const [tools, draft, make] = parts;
+		const inOrder = (part: string, marks: string[]) => {
+			const at = marks.map((m) => part.indexOf(m));
+			return at.every((x, i) => x >= 0 && (i === 0 || x > at[i - 1]));
+		};
+		expect(inOrder(tools, ['aria-label="Undo"', 'aria-label="Redo"', 'Add', 'Pick samples', 'Tidy', 'aria-label="Remove"', 'aria-label="Dissolve"'])).toBe(true);
+		expect(inOrder(draft, ['aria-label="Draft name"', 'the-scope', 'aria-haspopup="menu"'])).toBe(true);
+		expect(make).toContain('Create');
+		// Nothing of one group in another.
+		expect(draft).not.toContain('Pick samples');
+		expect(make).not.toContain('aria-label="Draft name"');
+		expect(tools).not.toContain('aria-label="Draft name"');
 	});
 
 	it('has Remove and Dissolve, off until something is selected', async () => {
@@ -58,12 +77,15 @@ describe('EditLid', () => {
 		expect(html).not.toMatch(/<button[^>]*aria-label="Redo"[^>]*disabled/);
 	});
 
-	it('says whether the draft is kept: saving, kept, or the error', async () => {
-		expect(await render(base)).toContain('Draft kept');
-		expect(await render({ ...base, saving: true })).toContain('Saving…');
+	it('keeps the save status out of the bar: it is in the Draft menu, and a failed save marks the Draft button', async () => {
+		const ok = await render(base);
+		expect(ok).not.toContain('Draft kept');
+		expect(ok).not.toContain('Saving…');
+		expect(ok).not.toContain('My drafts');
+		expect(ok).toMatch(/<button[^>]*class="ob"[^>]*>Draft/);
 		const bad = await render({ ...base, saveError: 'Could not reach the server; your changes are kept here.' });
-		expect(bad).toContain('Could not reach the server');
-		expect(bad).not.toContain('Draft kept');
+		expect(bad).toMatch(/<button[^>]*class="bad ob"[^>]*title="Could not reach the server/);
+		expect(bad).toContain('role="alert"');
 	});
 
 	it('shows the notice of a draft that changed in another tab', async () => {
@@ -74,5 +96,27 @@ describe('EditLid', () => {
 	it('has the slot the Create button goes in', async () => {
 		const html = await render(base, { create: () => h('button', { id: 'create' }, 'Create 1 sample') });
 		expect(html).toContain('Create 1 sample');
+	});
+});
+
+describe('the lid keeps each group on one line (the rules, read from the styles: a node environment has no layout)', () => {
+	const rule = (css: string, selector: string): string => new RegExp(`^${selector.replace('.', '[.]')} \{([^}]*)\}`, 'm').exec(css)?.[1] ?? '';
+	const lid = readFileSync(new URL('./EditLid.vue', import.meta.url), 'utf8');
+	const scope = readFileSync(new URL('./DraftScope.vue', import.meta.url), 'utf8');
+
+	it('the draft group does not wrap, so "Draft ▾" stays beside the name, and it can still take the width the others leave', () => {
+		expect(rule(lid, '.draft')).toMatch(/flex-wrap: nowrap/);
+		expect(rule(lid, '.draft')).toMatch(/flex: 1 1 /);
+		expect(rule(lid, '.draft')).not.toMatch(/flex-wrap: wrap/);
+		expect(rule(lid, '.open')).toMatch(/flex: none/);
+	});
+
+	it('the name shrinks before anything wraps, and Create keeps the right edge', () => {
+		expect(rule(lid, '.nm')).toMatch(/flex: 0 1 /);
+		expect(rule(lid, '.make')).toMatch(/margin-left: auto/);
+	});
+
+	it('the project and campaign choices are one line too', () => {
+		expect(rule(scope, '.pm-scope')).toMatch(/flex-wrap: nowrap/);
 	});
 });

@@ -1,10 +1,11 @@
-// The palette's state (redesign R1): whether the dock is folded (remembered per person), what is typed in its search box, and the one catalog it
-// lists, ranked like the add search (recents first). The list itself is menuModel.ts's `catalogEntries`, so the palette and the add search
-// cannot disagree about what can be added.
+// The palette's state (redesign R1, process-map creator K1): whether the dock is folded (remembered per person), what is typed in its search box,
+// and what it lists. With nothing typed that is the kinds (Sample, Operation, Test, From database…), the templates and what was added lately;
+// typed, it searches the whole catalog, ranked like the add search. The catalog is menuModel.ts's `catalogEntries`, so the palette and the add
+// search cannot disagree about what can be added.
 
 import { computed, ref, watch, type Ref } from 'vue';
 import type { MethodEntry, TestTypeEntry } from './catalog';
-import { catalogEntries, searchEntries, type MenuEntry } from './menuModel';
+import { catalogEntries, kindEntries, RECENT, searchEntries, type MenuEntry } from './menuModel';
 import { readFolded, writeFolded } from './recents';
 import type { TemplateItem } from './templates';
 
@@ -22,8 +23,16 @@ export function usePalette(o: {
 	const query = ref('');
 
 	const all = computed<MenuEntry[]>(() => catalogEntries({ methods: o.methods(), testTypes: o.testTypes(), templates: o.templates?.() }));
-	/** The entries the dock lists: the whole catalog, or what the search box finds. With nothing typed, what was added lately is on top. */
-	const entries = computed(() => searchEntries(all.value, query.value, o.recents.value));
+	/**
+	 * The entries the dock lists: with nothing typed the kinds, the templates and what was added lately (the methods and test types are found by
+	 * typing, or on the card once it is added); typed, whatever the search box finds in the whole catalog.
+	 */
+	const entries = computed(() => {
+		if (query.value.trim()) return searchEntries(all.value, query.value, o.recents.value);
+		// Templates come first, then the recents (a "New sample" remembered by an earlier version is the Sample row above).
+		const own = searchEntries(all.value, '', o.recents.value).filter((e) => !!e.template || (e.section === RECENT && e.choice.kind !== 'newSample'));
+		return [...kindEntries(), ...own];
+	});
 	/** Section headers while nothing is typed, as the add search does. */
 	const grouped = computed(() => !query.value.trim());
 

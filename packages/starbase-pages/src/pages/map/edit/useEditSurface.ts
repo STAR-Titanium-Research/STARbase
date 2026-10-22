@@ -4,8 +4,8 @@
 // useEditRemoval; duplicate, ×N here), and the pointer they open at. The page binds what this returns; the rules live in the modules it is
 // made of.
 
-import { computed, getCurrentInstance, onBeforeUnmount, onMounted, ref, shallowRef, type Ref } from 'vue';
-import type { DraftItem } from '@d1/ui';
+import { computed, getCurrentInstance, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, type Ref } from 'vue';
+import type { DraftItem, DraftKey } from '@d1/ui';
 import type { MapNode } from '../model/types';
 import type { MapEdit } from '../nodes/actions';
 import type { useMapCanvas } from '../useMapCanvas';
@@ -13,11 +13,13 @@ import type { useProcessMap } from '../useProcessMap';
 import { isKeyboardFocus } from '../keyboard';
 import { collectionOf, recordKey } from './checks';
 import { writableValues } from './catalog';
+import { newKeys } from './draft';
 import { connectTargets, type ConnectEntry, type ConnectNames } from './connectModel';
 import { sampleLabel, type MenuChoice, type MenuEntry } from './menuModel';
 import { draftKeysOfNode } from './socketRefs';
 import type { MenuTarget } from './menuTarget';
 import { recordedSocketReason } from './addDrop';
+import { autoWireSource, isRepeatAdd } from './addFollowUp';
 import { dropVerdict } from './wireDrop';
 import { resolveEnd, type SocketRef } from './socketRefs';
 import { useAddDrag } from './useAddDrag';
@@ -28,6 +30,7 @@ import type { EditMode } from './useEditMode';
 import { useEditInsert } from './useEditInsert';
 import { useEditKeys } from './useEditKeys';
 import { useEditRemoval } from './useEditRemoval';
+import { draftId } from './toGraph';
 import { usePalette } from './usePalette';
 import { useTemplateUi } from './useTemplateUi';
 import type { Templates } from './useTemplates';
@@ -60,7 +63,7 @@ export function useEditSurface(o: { edit: EditMode; /** The templates this perso
 	}
 
 	// ---- the pieces ------------------------------------------------------------------------------------------
-	const late: { menu: (t: MenuTarget) => void; connect: (t: MenuTarget) => void; attach: (t: MenuTarget) => void; dropWire: (s: SocketRef, socketId: string) => boolean; insert: (t: MenuTarget, c: MenuChoice) => Promise<boolean | void> | boolean | void } = { menu: () => undefined, connect: () => undefined, attach: () => undefined, dropWire: () => false, insert: () => undefined };
+	const late: { menu: (t: MenuTarget) => void; connect: (t: MenuTarget) => void; attach: (t: MenuTarget) => void; dropWire: (s: SocketRef, socketId: string) => boolean; insert: (t: MenuTarget, c: MenuChoice) => Promise<DraftKey[] | boolean | void> | DraftKey[] | boolean | void } = { menu: () => undefined, connect: () => undefined, attach: () => undefined, dropWire: () => false, insert: () => undefined };
 	const build = useEditCanvas({ ...o, openMenu: (t) => late.menu(t), openConnect: (t) => late.connect(t), dropWire: (s, id) => late.dropWire(s, id) });
 	// Remove, Dissolve and wire removal (R4); what it has to say goes where the canvas says its own problems.
 	const removal = useEditRemoval({ edit, map: o.map, canvasEl, say: (text) => void (build.problem.value = text) });
@@ -94,32 +97,96 @@ export function useEditSurface(o: { edit: EditMode; /** The templates this perso
 	const palette = usePalette({ methods: () => edit.catalog.methods.value, testTypes: () => edit.catalog.testTypes.value, templates: () => o.templates.items.value, recents: menu.recents, person: () => o.person?.() });
 	// Save as template, and what the palette does to a template (R7).
 	const templateUi = useTemplateUi({ edit, templates: o.templates, map: o.map, openPalette: () => palette.fold(false) });
+	/** A drop on the canvas or a socket: it keeps the target the pointer chose (no auto-wire), then shows what it added like any other add (K10). */
+	async function dropAt(t: MenuTarget, choice: MenuChoice): Promise<DraftKey[]> {
+		const keys = await menu.applyAt(t, choice);
+		showNew(keys);
+		return keys;
+	}
+	/** A drop on a wire puts the card between its ends; it is shown as well. */
+	function dropOnWire(wireId: string, choice: MenuChoice, flow: { x: number; y: number } | undefined, at: { x: number; y: number }): boolean {
+		const before = edit.body.value;
+		const done = insert.dropOnWire(wireId, choice, flow, at);
+		if (done) showNew(newKeys(before, edit.body.value));
+		return done;
+	}
 	const dragging = useAddDrag({
 		body: () => edit.body.value,
 		editing: () => edit.editing.value,
 		canvas: o.canvas,
 		canvasEl,
 		drop: build.mapEdit.drop,
-		applyAt: menu.applyAt,
+		applyAt: dropAt,
 		wireVerdict: insert.wireVerdict,
-		dropOnWire: insert.dropOnWire,
+		dropOnWire,
 		whyNot: (s) => recordedSocketReason(o.map.graph.value, s),
 		say: build.say,
 	});
 	/** What the palette draws and does, for the page to bind in one go. */
 	const paletteProps = computed(() => ({ entries: palette.entries.value, grouped: palette.grouped.value, folded: palette.folded.value, drag: dragging.drag.value, consumeClick: dragging.consumeClick, ...templateUi.paletteProps.value }));
 	const paletteEvents = { toggle: () => palette.toggle(), add: (e: MenuEntry) => paletteAdd(e), drag: dragging.start, ...templateUi.paletteEvents };
+	/** The entry the last palette add was for, and when: a second click on it a moment later is the same click. */
+	let lastAdd: { id: string; at: number } | null = null;
 	/**
 	 * Enter or a click on a palette entry (no dragging needed): "Existing sample…" opens the picker; anything else is added next to the selected card,
-	 * else at the middle of the canvas, and the layout keeps it clear of every other card.
+	 * else at the middle of the canvas, and the layout keeps it clear of every other card. An operation or a test is wired to the sample just added.
 	 */
 	function paletteAdd(entry: MenuEntry): void {
 		if (!edit.editing.value || entry.disabled) return;
 		if (entry.choice.kind === 'pickSamples') return void (pickerOpen.value = true);
+		const now = Date.now();
+		if (isRepeatAdd(lastAdd, entry.id, now)) return;
 		const anchor = o.map.selectedId.value ?? undefined;
 		const r = canvasEl.value?.getBoundingClientRect();
 		const at = r ? { x: r.left + r.width / 2, y: r.top + r.height / 2 } : { x: 0, y: 0 };
-		void menu.applyAt({ sock: null, at, ...(anchor ? { anchor } : { flow: o.canvas.toFlow(at.x, at.y) }) }, entry.choice);
+		// Only an add that added something is "the click": a refused one must not swallow a retry.
+		void addAt({ sock: null, at, ...(anchor ? { anchor } : { flow: o.canvas.toFlow(at.x, at.y) }) }, entry.choice).then((keys) => {
+			if (keys.length) lastAdd = { id: entry.id, at: now };
+		});
+	}
+
+	/**
+	 * Adds a choice at a target, then shows what it added (and gives its keys). With nothing to connect to, an operation or a test takes the sample
+	 * just added as its input (the same step as dropping it on that sample's output), so a click is enough to build a chain.
+	 */
+	async function addAt(t: MenuTarget, choice: MenuChoice): Promise<DraftKey[]> {
+		// A card selected that is not in the draft (one of the history) means the person is somewhere else: nothing is wired (K11).
+		const elsewhere = !edit.selectedKey.value && !!o.map.selectedId.value;
+		const from = !t.sock && !t.insert && !elsewhere ? autoWireSource(edit.body.value, edit.selectedKey.value, choice) : null;
+		const target: MenuTarget = from ? { at: t.at, sock: { kind: 'sample', id: draftId(from), side: 'out' }, anchor: `s:${draftId(from)}` } : t;
+		const keys = await menu.applyAt(target, choice);
+		showNew(keys);
+		return keys;
+	}
+	/** The search's choice: the same as a click on the palette. */
+	async function chooseFromSearch(choice: MenuChoice): Promise<void> {
+		const t = menu.target.value;
+		if (!t) return;
+		menu.close();
+		await addAt(t, choice);
+	}
+	/** The card a draft key is drawn as (a stack of passes is one card). */
+	const nodeOfKey = (key: DraftKey): MapNode | undefined => o.map.graph.value?.nodes.find((n) => draftKeysOfNode(edit.body.value, n).includes(key));
+	/**
+	 * What a person adding something sees: the new card is selected (no centring: the canvas pans only when it is not wholly in view), and the
+	 * first thing to fill in has the keyboard, so they can type at once.
+	 */
+	function showNew(keys: DraftKey[]): void {
+		// An insert or a drop on a wire can add a sample with the operation: the operation is the card with something to choose.
+		const lead = keys.find((k) => edit.body.value.items.find((i) => i.key === k)?.kind !== 'sample') ?? keys[0];
+		const node = lead ? nodeOfKey(lead) : undefined;
+		if (!node) return;
+		o.map.select(node.id);
+		// The layout makes room round the new card first: the canvas is asked to show it once that has settled.
+		void o.canvas.whenSettled().then(() => o.canvas.reveal(node.id));
+		void focusNewCard(node.id);
+	}
+	/** Puts the keyboard on the new card's kind choice, else its first empty field; nothing when the card has neither (yet). */
+	async function focusNewCard(id: string): Promise<void> {
+		await nextTick();
+		const card = [...(canvasEl.value?.querySelectorAll<HTMLElement>('.vue-flow__node') ?? [])].find((el) => el.dataset.id === id);
+		const field = card?.querySelector<HTMLElement>('[data-kind-select]') ?? [...(card?.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-field] input, [data-field] select') ?? [])].find((el) => !el.value);
+		field?.focus({ preventScroll: true });
 	}
 
 	// ---- Connect to… (E21) -----------------------------------------------------------------------------------
@@ -149,7 +216,7 @@ export function useEditSurface(o: { edit: EditMode; /** The templates this perso
 	}
 	/** Selects the card a draft item is drawn as, and brings it into view. */
 	function selectKey(key: string): void {
-		const node = o.map.graph.value?.nodes.find((n) => draftKeysOfNode(edit.body.value, n).includes(key));
+		const node = nodeOfKey(key);
 		if (node) o.map.select(node.id, { centre: true });
 	}
 	const connectEntries = computed<ConnectEntry[]>(() => (connecting.value?.sock ? connectTargets(edit.body.value, connecting.value.sock, names.value) : []));
@@ -242,7 +309,7 @@ export function useEditSurface(o: { edit: EditMode; /** The templates this perso
 		...build,
 		/** What the cards read: the canvas's, and the wire selection and locks of removal. */
 		mapEdit: { ...build.mapEdit, selectedWire: removal.selectedWire, selectWire: removal.selectWire, lockOf: removal.lockOf, wireLock: removal.wireLock, dropWire: dragging.dropWire, work: (node) => workChipOf(edit, node) } as MapEdit,
-		menu,
+		menu: { ...menu, choose: chooseFromSearch },
 		attaching,
 		attachHeading,
 		palette,

@@ -17,7 +17,10 @@
 //   A missing provide falls back to RIGHT / nothing open / nothing selected / nothing hidden.
 
 import { computed, inject, ref, type ComputedRef, type InjectionKey, type Ref } from 'vue';
+import type { DraftItem } from '@d1/ui';
 import { isKeyboardFocus } from '../keyboard';
+import type { MethodEntry, TestTypeEntry } from '../edit/catalog';
+import type { KindChoice } from '../edit/kindChange';
 import type { SocketRef } from '../edit/socketRefs';
 import { encodeSocket } from '../edit/socketRefs';
 import type { Dir } from '../model/elkInput';
@@ -66,8 +69,14 @@ export interface MapEdit {
 	socketKey(sock: SocketRef, e: KeyboardEvent): void;
 	/** A click on a socket that no pointer made (`detail` 0: Space on a button, a screen reader's activate): opens its menu. */
 	socketClick(sock: SocketRef, e: MouseEvent): void;
-	/** What the card's checks say: the ones that block Create (a red badge), else the warnings (an amber one); null when none. */
-	badge(node: MapNode): { count: number; text: string; level: 'block' | 'warn' } | null;
+	/** What the card's checks say: what is still to fill in (`fill`, amber) or, only when the server would refuse it, `refused` (red); `text` is the words for a screen reader. Null when none. */
+	badge(node: MapNode): { count: number; text: string; level: 'fill' | 'refused' } | null;
+	/** The draft item whose fields are typed on this card (K4): a new sample, or a new operation or test with its kind chosen; null on any other card. */
+	fieldsOf?(node: MapNode): DraftItem | null;
+	/** The names of the fields the card draws: none until the form's definitions are read, or on a card that draws none. */
+	fieldNames?(node: MapNode): string[];
+	/** The card drew its fields, or they changed: it is measured again and room is made round it, every card staying where it is (R6). */
+	grew?(nodeId: string): void;
 	/** The sockets of the card that have a wire. A card draws one socket per wire and a free one beside them while it is selected (R5). */
 	wiredSockets(node: MapNode): ReadonlySet<string>;
 	/** The wire an entry dragged from the palette is over, and whether it would be inserted there (green) or refused (red). */
@@ -81,6 +90,21 @@ export interface MapEdit {
 	wireLock(id: string): string | null;
 	/** The Planned / Done chip of a new operation or test (R9): its state and what pressing it does; null on any other card. */
 	work?(node: MapNode): { state: 'planned' | 'done'; label: string; toggle(): void } | null;
+	/** The kind dropdown of a new operation or test (K3): what it shows (the chosen method or test type, and the lists to choose from) and what choosing does; null on any other card. */
+	kind?(node: MapNode): KindPick | null;
+}
+
+/** The words in a card's header chip for its badge (K8): "3 missing" for what can still be filled in, "1 refused" for what the server would refuse. */
+export const badgeText = (b: { count: number; level: 'fill' | 'refused' }): string => `${b.count} ${b.level === 'refused' ? 'refused' : 'missing'}`;
+
+/** What a card draws its kind dropdown from (see `MapEdit.kind`). */
+export interface KindPick {
+	kind: 'operation' | 'test';
+	/** The method id or test type chosen so far; null while none is. */
+	value: string | null;
+	methods: MethodEntry[];
+	testTypes: TestTypeEntry[];
+	choose(choice: KindChoice): void;
 }
 
 export const MAP_ACTIONS: InjectionKey<MapActions> = Symbol('mapActions');

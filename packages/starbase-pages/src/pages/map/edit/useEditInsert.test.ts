@@ -95,6 +95,21 @@ describe('Insert before and after the selected card', () => {
 		expect(edit.body.value).toEqual(before);
 	});
 
+	it('gives the keys of what the insert added, and none of the history sample that joined with it', async () => {
+		const { insert, menu, edit } = await setup(emptyBody(), { loaded: loaded(), selected: 's:s2' });
+		insert.openFor('after');
+		const keys = await insert.choose(menu.target.value!, turning);
+		expect(keys).toEqual(edit.body.value.items.filter((i) => i.kind === 'operation').map((i) => i.key));
+		expect(keys).toHaveLength(1);
+		expect(edit.body.value.items.some((i) => i.existing?.id === 's2'), 'the sample joined the draft').toBe(true);
+	});
+
+	it('gives false when the insert was refused', async () => {
+		const { insert, menu } = await setup(chain(), { selected: 's:draft:n4' });
+		insert.openFor('before');
+		expect(await insert.choose(menu.target.value!, { kind: 'test', testType: 'xrd' })).toBe(false);
+	});
+
 	it('before a DONE sample is refused up front: the reason is said, no search opens, the draft is untouched and there is no undo step', async () => {
 		const { insert, menu, edit, said, sampleActions } = await setup(emptyBody(), { loaded: loaded(), selected: 's:s2' });
 		expect(insert.openFor('before')).toBe(true);

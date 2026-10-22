@@ -6,7 +6,7 @@ import CreateBar from './CreateBar.vue';
 const render = (props: Record<string, unknown>) => renderToString(createSSRApp(CreateBar, props));
 const text = (html: string) => html.replace(/<!--.*?-->/g, '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 const button = (html: string) => html.match(/<button[^>]*>/)?.[0] ?? '';
-const base = { summary: 'Create 2 operations, 4 samples', missing: 0, creating: false };
+const base = { summary: 'Create 2 operations, 4 samples', missing: 0, toFill: 0, creating: false };
 
 describe('CreateBar', () => {
 	it('is a primary button saying what it will make', async () => {
@@ -16,12 +16,29 @@ describe('CreateBar', () => {
 		expect(button(html)).toContain('type="button"');
 	});
 
-	it('is disabled and says how many things are missing while blocking checks exist', async () => {
-		const html = await render({ ...base, missing: 3 });
-		expect(text(html)).toBe('3 things missing');
+	it('is a disabled Create with "N to fill in" beside it while blocking checks exist', async () => {
+		const html = await render({ ...base, missing: 3, toFill: 3 });
+		expect(text(html)).toBe('3 to fill in Create');
+		expect(html).toMatch(/<span class="fill"[^>]*>3 to fill in<\/span>/);
+		expect(html.match(/<button[^>]*>[\s\S]*?<\/button>/)?.[0].replace(/<[^>]+>/g, '')).toBe('Create');
 		expect(button(html)).toContain('disabled');
 		expect(button(html)).toContain('Create 2 operations, 4 samples'); // the title still says what it would make
-		expect((await render({ ...base, missing: 1 })).includes('1 thing missing')).toBe(true);
+		expect(text(await render({ ...base, missing: 1, toFill: 1 }))).toContain('1 to fill in');
+	});
+
+	it('says how much is still to fill in beside an enabled Create too: a machine or a date does not stop it', async () => {
+		const html = await render({ ...base, toFill: 2 });
+		expect(text(html)).toBe('2 to fill in Create 2 operations, 4 samples');
+		expect(button(html)).not.toContain('disabled');
+		// The count is the cards' badges added up: it can be larger than what Create waits on.
+		const waiting = await render({ ...base, missing: 1, toFill: 4 });
+		expect(text(waiting)).toBe('4 to fill in Create');
+		expect(button(waiting)).toContain('disabled');
+	});
+
+	it('says what it will make, with nothing beside it, once nothing is missing', async () => {
+		// The status region stays mounted (a live region is announced when its text changes), just empty.
+		expect(await render(base)).toMatch(/<span class="fill"[^>]*><\/span>/);
 	});
 
 	it('shows a spinner and cannot be pressed while creating', async () => {
@@ -34,8 +51,9 @@ describe('CreateBar', () => {
 	});
 
 	it('creating wins over missing: the spinner is the state', async () => {
-		const html = await render({ ...base, creating: true, missing: 2 });
+		const html = await render({ ...base, creating: true, missing: 2, toFill: 2 });
 		expect(text(html)).toBe('Creating…');
+		expect(html).toMatch(/<span class="fill"[^>]*><\/span>/);
 	});
 
 	it('puts a failed Create\'s reason in an alert the button points at', async () => {
@@ -60,7 +78,7 @@ describe('CreateBar', () => {
 	});
 
 	it('a draft that makes nothing is disabled and says what to do', async () => {
-		const html = await render({ summary: 'Add an operation, test or new sample to create', missing: 0, creating: false, empty: true });
+		const html = await render({ summary: 'Add an operation, test or new sample to create', missing: 0, toFill: 0, creating: false, empty: true });
 		expect(button(html)).toContain('disabled');
 		expect(text(html)).toBe('Add an operation, test or new sample to create');
 	});

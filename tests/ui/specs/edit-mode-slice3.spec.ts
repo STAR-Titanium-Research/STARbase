@@ -1,7 +1,7 @@
 import { test, expect, type APIRequestContext, type Locator, type Page } from '@playwright/test';
 import { D1, STAR, apiAs, getRetrying, listRecords, readRecord, signIn, stackAvailable } from '../starbase/localStack';
 import {
-	DRAFT_URL, addSearch, canvasOf, cards, createButton, distinctRecords, draftIdOf, openNewDraft, openAddSearch, paletteEntry, pickSamples, pressCreate, readDraft, sampleIdOf, savedDraft, secondMember, selectCard,
+	DRAFT_URL, addSearch, canvasOf, cards, createButton, distinctRecords, draftIdOf, openNewDraft, openAddSearch, paletteEntry, paletteKind, pickSamples, pressCreate, readDraft, sampleIdOf, savedDraft, secondMember, selectCard,
 	sockOf, startEditingMapOf, clickWire, wireBetween, boxOf, canvasMiddle, dragEntryTo, fit,
 	type Ref,
 } from '../starbase/mapEdit';
@@ -227,13 +227,13 @@ test.describe('as a Lab Member', () => {
 		await expect(sampleCard(page, orphan.sampleId)).toBeVisible();
 		await expect(createButton(page)).toHaveText('Attach 1 operation');
 
-		// The wire is removable: the operation stays on the canvas, attached to nothing, and Create says what is missing.
+		// The wire is removable: the operation stays on the canvas, attached to nothing, and Create waits, with "N to fill in" beside it.
 		await clickWire(page, wireBetween(page, `s:${rawId}:out`, `op:${orphan.operationId}:in`));
 		await page.keyboard.press('Delete');
 		await expect(wireBetween(page, `s:${rawId}:out`, `op:${orphan.operationId}:in`)).toHaveCount(0);
 		await expect(opCard(page, orphan.operationId)).toBeVisible();
 		await expect(createButton(page)).toBeDisabled();
-		await expect(createButton(page)).toContainText('missing');
+		await expect(page.locator('.pm-create .fill')).toContainText('to fill in');
 		await expect(checks(page)).toContainText('needs a sample');
 
 		// Delete on the loose operation takes it off the draft; the record is not deleted.
@@ -413,7 +413,7 @@ test.describe('as a Lab Member', () => {
 		await page.keyboard.press('Escape');
 		await expect(addSearch(page)).toBeHidden();
 		// A new sample's input (what makes it): not.
-		await paletteEntry(page, 'New sample').click();
+		await (await paletteKind(page, 'sample')).click();
 		await canvasOf(page).locator('[data-sock^="sample|draft:"][data-sock$="|in"]').first().press('Enter');
 		await expect(addSearch(page)).toBeVisible();
 		await expect(offered()).toHaveCount(0);

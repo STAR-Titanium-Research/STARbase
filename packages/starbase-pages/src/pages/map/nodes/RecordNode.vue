@@ -4,8 +4,9 @@ import { Handle } from '@vue-flow/core';
 import { StatusBadge } from '@d1/ui';
 import type { SocketRef } from '../edit/socketRefs';
 import type { RecordNode } from '../model/types';
-import { cardHandlers, editSocketProps, freeSocketLabel, useExpanded, useHiddenSides, useMapActions, useMapEdit, useMapView, useSelected, useSocketBinder } from './actions';
+import { badgeText, cardHandlers, editSocketProps, freeSocketLabel, useExpanded, useHiddenSides, useMapActions, useMapEdit, useMapView, useSelected, useSocketBinder } from './actions';
 import { edgeStyle, handlePosition } from './handle';
+import CardFields from '../edit/CardFields.vue';
 import HiddenPill from './HiddenPill.vue';
 import { KINDS, kindVar, slotText, statusKindOf } from './kinds';
 
@@ -49,6 +50,10 @@ const nIn = computed(() => props.data.ins.length + (freeIn.value ? 1 : 0));
 const nOut = computed(() => outHandles.value.length + (freeOut.value ? 1 : 0));
 const freeOutProps = computed(() => (edit && outRef.value ? editSocketProps(edit, outRef.value) : {}));
 const badge = computed(() => (edit?.editing.value ? edit.badge(props.data) : null));
+/** A new sample types its name, material, geometry and method on the card (K6). */
+const cardItem = computed(() => (edit?.editing.value && props.data.draft ? (edit.fieldsOf?.(props.data) ?? null) : null));
+/** Nothing is missing on a card that draws its fields (not before the form's definitions are read): it says so (K8). */
+const ready = computed(() => !badge.value && !!cardItem.value && (edit?.fieldNames?.(props.data).length ?? 0) > 0);
 /** Why the selected card cannot be removed (a done record), shown with a lock: "Done records can't be removed from the map". */
 const lock = computed(() => (selected.value && edit?.editing.value ? edit.lockOf(props.data) : null));
 const freeInProps = computed(() => (edit && inRef.value ? editSocketProps(edit, inRef.value) : {}));
@@ -88,7 +93,8 @@ const freeInProps = computed(() => (edit && inRef.value ? editSocketProps(edit, 
 				<span class="kind k-ink k-tint"><v-icon :name="style.icon" x-small />{{ style.label }}</span>
 				<StatusBadge class="st" :kind="statusKindOf(data.kind)" :value="data.status" />
 				<span v-if="lock" class="lock" role="img" :aria-label="lock" :title="lock"><v-icon name="lock" x-small /></span>
-				<span v-if="badge" class="chk" :class="{ warn: badge.level === 'warn' }" role="img" :aria-label="badge.text" :title="badge.text">{{ badge.count }}</span>
+				<span v-if="badge" class="chk" :class="badge.level" role="img" :aria-label="badge.text" :title="badge.text">{{ badgeText(badge) }}</span>
+				<span v-else-if="ready" class="chk ready" role="img" aria-label="Nothing is missing" title="Nothing is missing">ready</span>
 				<button v-if="!data.draft" class="xbtn nodrag nopan" :class="{ quiet: !open }" type="button" :aria-label="open ? 'Collapse' : 'Expand'" @click="card.expand"><v-icon :name="open ? 'remove' : 'add'" x-small /></button>
 			</div>
 			<template v-if="named">
@@ -99,6 +105,7 @@ const freeInProps = computed(() => (edit && inRef.value ? editSocketProps(edit, 
 			<div v-if="meta" class="meta">{{ meta }}</div>
 			<div v-if="lock" class="why" role="note">{{ lock }}</div>
 		</div>
+		<CardFields v-if="cardItem" :item="cardItem" @grew="edit?.grew?.(id)" />
 		<Handle
 			v-for="(s, i) in outHandles"
 			:id="s"

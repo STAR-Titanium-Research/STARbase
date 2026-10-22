@@ -75,7 +75,17 @@ describe('dropping an operation on a wire', () => {
 	it('a test cannot go between two cards: it has nothing coming out', () => {
 		const body = chain();
 		const g = graphOf(null, body);
-		expect(insertOnWire(body, g, wireOf(g, 's:draft:n1', 'op:draft:n3'), { kind: 'test', testType: 'xrd' })).toEqual({ ok: false, reason: TEST_BETWEEN, locked: false });
+		const wire = wireOf(g, 's:draft:n1', 'op:draft:n3');
+		for (const test of [{ kind: 'test', testType: 'xrd' }, { kind: 'newTest' }] as const) expect(insertOnWire(body, g, wire, test), test.kind).toEqual({ ok: false, reason: TEST_BETWEEN, locked: false });
+	});
+
+	it('a blank operation (the palette\'s Operation) goes in the same places, with no method chosen yet', () => {
+		const body = chain();
+		const g = graphOf(null, body);
+		const after = run(done(insertOnWire(body, g, wireOf(g, 's:draft:n1', 'op:draft:n3'), { kind: 'newOperation' })), body);
+		expect(kinds(after)).toEqual(['n1:sample', 'n2:operation', 'n4:sample', 'n5:operation', 'n7:sample']);
+		expect(wiresText(after)).toEqual(['n1>n5.0', 'n2.0>n4', 'n5.0>n7', 'n7>n2.0']);
+		expect(after.items.find((i) => i.key === 'n5')?.values.method_id).toBeUndefined();
 	});
 
 	it('a new sample goes between two operations, not between a sample and an operation', () => {

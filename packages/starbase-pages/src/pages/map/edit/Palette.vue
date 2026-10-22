@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue';
+import { KINDS, kindVar } from '../nodes/kinds';
 import { draggable, type PaletteDrag } from './useAddDrag';
 import type { MenuEntry } from './menuModel';
 import TemplateManage from './TemplateManage.vue';
 import type { TemplateScope } from './templates';
 
-// The palette (redesign R1): the left dock of edit mode. A search box over the one catalog (samples, operations by process category, tests),
-// every entry a drag source: drop it on the empty canvas (a floating card), on a free socket (connected there) or on a wire (inserted between
-// its ends). A mouse drags; the keyboard reaches every entry with Tab and Enter adds it (next to the selected card, else at the middle of the
+// The palette (redesign R1, process-map creator K1): the left dock of edit mode. It lists the kinds (Sample, Operation, Test, in the map's own icon
+// and colour, and From database…); a search box finds anything in the one catalog (samples, operations by process category, tests). Every entry is
+// a drag source: drop it on the empty canvas (a floating card), on a free socket (connected there) or on a wire (inserted between its ends). A
+// mouse drags or clicks; the keyboard reaches every entry with Tab and Enter adds it (next to the selected card, else at the middle of the
 // canvas). The dock folds to a rail, and remembers that per person. Presentational: the page owns what the entries do.
 const props = defineProps<{
 	entries: MenuEntry[];
@@ -82,7 +84,7 @@ const chip = computed(() => (props.drag ? (props.drag.ok === false ? 'bad' : pro
 		</div>
 		<template v-if="!folded">
 			<input ref="search" v-model="query" class="q" type="search" autocomplete="off" spellcheck="false" placeholder="Search…" aria-label="Search the palette" @keydown.esc.stop="query = ''" />
-			<p class="hint">Drag onto the canvas, a socket or a wire. Enter adds.</p>
+			<p class="hint">Click, Enter or drag to add.</p>
 			<p v-if="templateNotice" class="note" :class="{ bad: templateFailed }" role="status" data-template-notice>
 				<span>{{ templateNotice }}</span>
 				<button type="button" class="x" aria-label="Dismiss" @click="emit('template-dismiss')"><v-icon name="close" x-small /></button>
@@ -94,13 +96,15 @@ const chip = computed(() => (props.drag ? (props.drag.ok === false ? 'bad' : pro
 						<button
 							type="button"
 							class="pe"
-							:class="{ drag: draggable(r.e), grey: !!r.e.warn || !!r.e.disabled, off: !!r.e.disabled }"
+							:class="{ drag: draggable(r.e), grey: !!r.e.warn || !!r.e.disabled, off: !!r.e.disabled, kind: !!r.e.kind }"
+							:style="r.e.kind ? { '--k': kindVar(KINDS[r.e.kind]) } : undefined"
 							:aria-disabled="!!r.e.disabled || undefined"
 							:data-entry="r.e.id"
-							:title="draggable(r.e) ? 'Drag onto the canvas, a socket or a wire. Enter adds it.' : r.e.detail"
+							:title="draggable(r.e) ? 'Click, Enter or drag to add.' : r.e.detail"
 							@pointerdown="draggable(r.e) && emit('drag', r.e, $event)"
 							@click="click(r.e)"
 						>
+							<v-icon v-if="r.e.kind" class="ki" :name="KINDS[r.e.kind].icon" small />
 							<span class="lab">{{ r.e.label }}</span>
 							<span v-if="r.e.detail" class="det">{{ r.e.detail }}</span>
 							<span v-if="!grouped && r.e.section" class="cat">{{ r.e.section }}</span>
@@ -205,6 +209,9 @@ const chip = computed(() => (props.drag ? (props.drag.ok === false ? 'bad' : pro
 .pe:hover, .pe:focus-visible { background: var(--d1-tile); border-color: var(--d1-line); outline: none; }
 .pe:focus-visible { border-color: var(--d1-accent, var(--theme--primary)); }
 .lab { font-weight: 600; }
+/* A kind row: the icon of the map's card of that kind, in its colour. */
+.pe.kind { align-items: center; }
+.ki { flex: none; color: var(--k); }
 .det { font-size: var(--fs-sm, 12px); color: var(--d1-dim); }
 .cat { margin-left: auto; font-size: var(--fs-xs, 11px); color: var(--d1-dim); }
 .none { margin: 0; padding: 10px 8px; color: var(--d1-dim); }

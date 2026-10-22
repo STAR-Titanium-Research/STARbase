@@ -24,6 +24,10 @@ export type MenuChoice =
 	| { kind: 'operation'; methodId: string; category: ProcessCategory; template?: TemplateChoice }
 	| { kind: 'test'; testType: string; template?: TemplateChoice }
 	| { kind: 'newSample' }
+	/** A blank operation: the person chooses its kind (method) on the card. */
+	| { kind: 'newOperation' }
+	/** A blank test: the person chooses its type on the card. */
+	| { kind: 'newTest' }
 	/** The operation's output is the sample it took in: the work is done in place. */
 	| { kind: 'sameSample' }
 	/** Opens the search for a sample on the canvas (an output) or in the database (an input). */
@@ -57,6 +61,8 @@ export interface MenuEntry {
 	detail?: string;
 	/** More words a search matches (a test type's value, a process category's key). Never shown. */
 	keys?: string;
+	/** A kind row of the palette: drawn with the map's icon and colour for that kind. */
+	kind?: 'sample' | 'operation' | 'test';
 	choice: MenuChoice;
 	/** Why it cannot be chosen now. */
 	disabled?: string;
@@ -122,6 +128,16 @@ export const FROM_DATABASE: MenuEntry = {
 	choice: { kind: 'fromDatabase' },
 };
 
+/** The kinds the palette lists (and the add search lists first): what to add, the kind of operation or test chosen on the card after. */
+export function kindEntries(): MenuEntry[] {
+	return [
+		{ id: 'kind:sample', section: 'Add', label: 'Sample', detail: 'a new sample', kind: 'sample', choice: { kind: 'newSample' } },
+		{ id: 'kind:operation', section: 'Add', label: 'Operation', detail: 'choose the kind on the card', kind: 'operation', choice: { kind: 'newOperation' } },
+		{ id: 'kind:test', section: 'Add', label: 'Test', detail: 'choose the type on the card', kind: 'test', choice: { kind: 'newTest' } },
+		FROM_DATABASE,
+	];
+}
+
 /** The whole catalog (the palette's list, and what an unconnected add search offers): templates, samples, then operations by category, then tests. */
 export function catalogEntries(cat: MenuCatalog): MenuEntry[] {
 	return [
@@ -166,9 +182,11 @@ function baseEntries(body: DraftBody, f: MenuFor, cat: MenuCatalog): MenuEntry[]
 		out.push({ id: 'sample:existing', section: 'Sample', label: 'Existing sample…', detail: 'search the samples', choice: { kind: 'existingSample' } });
 		return out;
 	}
-	// Unconnected: the whole catalog.
-	if (f.side === null) return catalogEntries(cat);
-	// From a sample's output, or a sample's input: the containers that can be made (a test has no output, so it cannot make a sample).
+	// Unconnected: the kinds, then the whole catalog.
+	// (The "Sample" kind is a new sample already, so the catalog's "New sample" would be the same thing twice.)
+	if (f.side === null) return [...kindEntries(), ...catalogEntries(cat).filter((e) => e.id !== FROM_DATABASE.id && e.id !== 'sample:new')];
+	// From a sample's output, or a sample's input: the kinds of container that can be made, then the containers (a test has no output, so it cannot make a sample).
+	out.push(...kindEntries().filter((e) => e.choice.kind === 'newOperation' || (e.choice.kind === 'newTest' && f.side !== 'in')));
 	out.push(...templateEntries(cat.templates ?? [], cat, f.side === 'in' ? 'operation' : undefined));
 	// From a sample's output a recorded operation with no input can also be attached (a sample's input is made by an operation, which is another thing).
 	if (f.side === 'out') out.push(FROM_DATABASE);
@@ -290,6 +308,10 @@ export function actionsFor(t: ChoiceTarget, choice: MenuChoice): DraftAction[] {
 			return container('operation', { from: 'template', values: choice.template ? choice.template.values : operationValues(choice.methodId, choice.category) });
 		case 'test':
 			return container('test', choice.template ? { from: 'template', values: choice.template.values } : { from: 'blank', testType: choice.testType });
+		case 'newOperation':
+			return container('operation', { from: 'blank' });
+		case 'newTest':
+			return container('test', { from: 'blank' });
 		case 'newSample':
 			if (side === null) return [{ type: 'addSample', at }];
 			if (side === 'out' && t.card === 'operation' && end) return [{ type: 'addSample', from: end, at }];

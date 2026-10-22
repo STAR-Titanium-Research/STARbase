@@ -127,6 +127,18 @@ describe('FieldForm', () => {
 		expect([...hardness.matchAll(/<h2[^>]*>(.*?)<\/h2>/g)].map((m) => m[1])).toEqual(['What']);
 	});
 
+	it('flagged puts class flag, a missing mark and a "Missing." note on those rows only', async () => {
+		const html = await render({ collection: 'physical_samples', fields: SAMPLE_DEFS, modelValue: {}, flagged: ['nickname'] });
+		const flagRow = (field: string) => new RegExp('class="[^"]*\\bflag\\b[^"]*" data-field="' + field + '"');
+		expect(html).toMatch(flagRow('nickname'));
+		expect(row(html, 'nickname')).toContain('aria-label="missing"');
+		expect(text(row(html, 'nickname'))).toContain('Missing.');
+		expect(html).not.toMatch(flagRow('form'));
+		expect(row(html, 'form')).not.toContain('aria-label="missing"');
+		expect(html.match(/class="[^"]*\bflag\b[^"]*" data-field=/g)).toHaveLength(1);
+		expect(await render({ collection: 'physical_samples', fields: SAMPLE_DEFS, modelValue: {} })).not.toMatch(/class="[^"]*\bflag\b[^"]*" data-field=/);
+	});
+
 	it('inherited values show greyed with a tag, and an own value replaces them', async () => {
 		const inherited = await render({ collection: 'physical_samples', fields: SAMPLE_DEFS, modelValue: {}, inherited: { nickname: 'from the campaign' } });
 		const r = row(inherited, 'nickname');

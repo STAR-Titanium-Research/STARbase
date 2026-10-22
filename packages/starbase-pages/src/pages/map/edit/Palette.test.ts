@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createSSRApp, defineComponent, h } from 'vue';
 import { renderToString } from 'vue/server-renderer';
 import Palette from './Palette.vue';
-import { catalogEntries } from './menuModel';
+import { catalogEntries, kindEntries } from './menuModel';
 import type { TemplateItem } from './templates';
 
 const VIcon = defineComponent({ props: { name: String }, setup: (p) => () => h('i', { class: 'v-icon' }, p.name) });
@@ -33,11 +33,31 @@ describe('Palette', () => {
 		expect(html.match(/class="[^"]*\bpe\b/g)).toHaveLength(entries.length);
 	});
 
+	it('lists the kinds with the map\'s icon and colour: Sample, Operation, Test; From database… keeps its plain look', async () => {
+		const html = await render({ entries: kindEntries() });
+		const tag = (id: string) => html.match(new RegExp(`<button[^>]*data-entry="${id}"[^>]*>.*?</button>`))?.[0] ?? '';
+		expect(html.match(/class="[^"]*\bpe\b/g)).toHaveLength(4);
+		expect([...html.matchAll(/class="sec"[^>]*>([^<]*)/g)].map((m) => m[1]), 'the section headers').toEqual(['Add', 'From the database']);
+		for (const [id, icon, color] of [['kind:sample', 'science', '--k-sample'], ['kind:operation', 'settings', '--k-op'], ['kind:test', 'fact_check', '--k-test']]) {
+			expect(tag(id), id).toMatch(new RegExp(`<i class="v-icon ki"[^>]*>${icon}</i>`));
+			expect(tag(id), id).toContain(`--k:var(${color})`);
+		}
+		expect(tag('kind:operation')).toContain('choose the kind on the card');
+		expect(tag('db:attach')).not.toContain('v-icon');
+		expect(tag('db:attach')).not.toContain('--k:');
+		// Every one can be added by a click or a drag.
+		for (const id of ['kind:sample', 'kind:operation', 'kind:test', 'db:attach']) expect(tag(id)).toMatch(/class="[^"]*\bdrag\b/);
+	});
+
+	it('says how to add: click, Enter or drag', async () => {
+		expect(text(await render({}))).toContain('Click, Enter or drag to add.');
+	});
+
 	it('every entry that can be added is a drag source, and says how; Existing sample… is not one', async () => {
 		const html = await render({});
 		const tag = (id: string) => html.match(new RegExp(`<button[^>]*data-entry="${id}"[^>]*>`))?.[0] ?? '';
 		expect(tag('op:mt')).toMatch(/class="[^"]*\bdrag\b/);
-		expect(tag('op:mt')).toContain('title="Drag onto the canvas, a socket or a wire. Enter adds it."');
+		expect(tag('op:mt')).toContain('title="Click, Enter or drag to add."');
 		expect(tag('sample:pick')).not.toMatch(/\bdrag\b/);
 	});
 

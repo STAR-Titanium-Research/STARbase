@@ -87,14 +87,14 @@ export function insertOnDraftWires(body: DraftBody, wires: Wire[], choice: MenuC
 	const from = body.items.find((i) => i.key === wire.from.key);
 	const to = body.items.find((i) => i.key === wire.to.key);
 	if (!from || !to) return fail(NO_FIT);
-	if (choice.kind === 'test') return fail(TEST_BETWEEN);
+	if (choice.kind === 'test' || choice.kind === 'newTest') return fail(TEST_BETWEEN);
 	/** Wires the end made last (by key) to every end that was on the old wire. */
 	const toAll = (key: (made: DraftKey[]) => WireEnd): Step[] => ends.map((end) => ({ made }) => ({ type: 'wire' as const, from: key(made), to: end }));
 	if (choice.kind === 'newSample') {
 		if (from.kind !== 'operation' || to.kind === 'sample') return fail(SAMPLE_BETWEEN);
 		return plan(body, [...unwires(wires), () => ({ type: 'addSample', from: wire.from, at }), ...toAll((made) => ({ key: made[0] }))]);
 	}
-	if (choice.kind !== 'operation') return fail(NO_FIT);
+	if (choice.kind !== 'operation' && choice.kind !== 'newOperation') return fail(NO_FIT);
 	const x = containerOf(body, choice, at);
 	if (!x) return fail(NO_FIT);
 	if (from.kind === 'sample' && to.kind !== 'sample') {

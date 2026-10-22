@@ -42,7 +42,7 @@ export interface PaletteDrag {
 }
 
 /** An entry the pointer can carry: a thing to add, not a sub-menu ("Existing sample…" opens the picker). "From database…" can be carried to the sample it is for. */
-export const draggable = (e: MenuEntry): boolean => !e.disabled && (e.choice.kind === 'operation' || e.choice.kind === 'test' || e.choice.kind === 'newSample' || e.choice.kind === 'fromDatabase');
+export const draggable = (e: MenuEntry): boolean => !e.disabled && (e.choice.kind === 'operation' || e.choice.kind === 'test' || e.choice.kind === 'newOperation' || e.choice.kind === 'newTest' || e.choice.kind === 'newSample' || e.choice.kind === 'fromDatabase');
 
 export function useAddDrag(o: {
 	body: () => DraftBody;
@@ -52,7 +52,7 @@ export function useAddDrag(o: {
 	/** The socket under the pointer, as the cards draw it (the same state a dragged wire uses). */
 	drop: Ref<{ sock: string; ok: boolean } | null>;
 	/** Does what a choice at a target does: connects at a socket, adds on empty canvas. */
-	applyAt: (t: MenuTarget, choice: MenuChoice) => Promise<void>;
+	applyAt: (t: MenuTarget, choice: MenuChoice) => Promise<unknown>;
 	/** An entry on a wire: the reason it is refused (and whether the wire is locked), or null; and doing it. */
 	wireVerdict: (wireId: string, choice: MenuChoice) => { reason: string; locked: boolean } | null;
 	dropOnWire: (wireId: string, choice: MenuChoice, flow: { x: number; y: number } | undefined, at: { x: number; y: number }) => boolean;
