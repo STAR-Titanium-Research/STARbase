@@ -4695,6 +4695,8 @@ test('buildListQuery: link_batch_size counts only the batch files the caller can
   assert.deepEqual(buildListQuery({ personId: null, teamIds: [], admin: false }, f).bindings.slice(0, 3), [false, null, ''], 'a login with no person counts nothing');
   assert.doesNotMatch(buildListQuery(alice, f, { count: true }).sql, /bc\./);
   assert.match(q.sql, /c\.decided_by,/, 'the row says who linked it (can_undo)');
+});
+
 // ---- scan progress (GET /progress) -----------------------------------------------------------------------------------------------
 
 const pgDir = (rel, owner, listed = true) => ({ rel_path: rel, ...owner, dir_mtime: null, last_listed_at: listed ? '2026-10-15T11:00:00.000Z' : null });
