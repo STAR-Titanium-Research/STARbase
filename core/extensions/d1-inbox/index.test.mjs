@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import endpoint, {
-  ERRORS, HttpError, LINK_COLLECTIONS, LINK_TARGETS, SQL, buildListQuery, canChange, canSee, etagMatches, fileOut, folderOfCandidate, isIgnored, mount, parseFileFilters,
+  ERRORS, HttpError, LINK_COLLECTIONS, LINK_TARGETS, SQL, buildListQuery, canChange, canSee, canUndoRow, etagMatches, fileOut, folderOfCandidate, isIgnored, mount, parseFileFilters,
   parseIgnoredFolder, parseScanItem, safeEqual, semAccess, shapeSemSettings, shapeSummary, unfit,
 } from './index.js';
 import { LAB_VIEWER_ROLE_ID } from '../d1-record-access/index.js';
@@ -694,7 +694,7 @@ test('buildListQuery: each tab, the owner scope and the filters are bindings, ne
   // an owner replaces the default scope
   const me = buildListQuery(scope, parseFileFilters({ owner: 'me' }));
   assert.match(me.sql, /c\.owner_person_id = \?/);
-  assert.doesNotMatch(me.sql, /owner_team_id = ANY/);
+  assert.doesNotMatch(me.sql.slice(me.sql.indexOf(' FROM d1_private.file_candidates c ')), /owner_team_id = ANY/, 'the owner scope of the rows is only the person');
   assert.ok(me.bindings.includes(P.alice));
   const one = buildListQuery(scope, parseFileFilters({ owner: `team:${TEAM}` }));
   assert.match(one.sql, /c\.owner_team_id = \?/);
@@ -774,7 +774,7 @@ test('shapeSummary: new count and older-with-exact-match, per person and per tea
 // ---- the wrapper: sign-in, Directus-shaped errors, Lab Viewer ------------------------------------------------------------
 
 const USER_ROUTES = [
-  'GET /summary', 'GET /files', 'POST /link', 'POST /accept-all', 'POST /dismiss', 'POST /restore', 'POST /undo',
+  'GET /summary', 'GET /files', 'POST /link', 'POST /relink', 'POST /accept-all', 'POST /dismiss', 'POST /restore', 'POST /undo',
   'POST /rescan', 'GET /prefs', 'PUT /prefs', 'GET /admin', 'POST /admin/scan-all', 'GET /sem-settings', 'PATCH /sem-settings/:file',
   'GET /ignored-folders', 'POST /ignored-folders', 'DELETE /ignored-folders/:id',
 ];
@@ -809,7 +809,7 @@ test('a Lab Viewer changes nothing: every write route is 403 READ_ONLY_ROLE and 
   const { call } = setup(w);
   const writes = [
     ['POST /link', { items: [link(c)] }], ['POST /accept-all', { filter: {} }], ['POST /dismiss', { candidate_ids: [c.candidate_id] }],
-    ['POST /restore', { candidate_ids: [c.candidate_id] }], ['POST /undo', { link_batch_id: ID(1) }], ['POST /rescan', {}], ['PUT /prefs', { auto_link: true }],
+    ['POST /restore', { candidate_ids: [c.candidate_id] }], ['POST /undo', { link_batch_id: ID(1) }], ['POST /relink', { candidate_id: c.candidate_id, collection: 'physical_samples', record_id: S1 }], ['POST /rescan', {}], ['PUT /prefs', { auto_link: true }],
     ['PATCH /sem-settings/:file', { field: 'kv', value: 10 }],
     ['POST /ignored-folders', { folder: 'x' }], ['DELETE /ignored-folders/:id', undefined],
   ];
@@ -4201,7 +4201,7 @@ test('the default export is the endpoint: id d1-inbox, a handler that registers 
   assert.deepEqual([...router.routes.keys()].sort(), [
     'DELETE /ignored-folders/:id', 'GET /admin', 'GET /files', 'GET /files/:candidate_id/preview', 'GET /files/:candidate_id/thumb', 'GET /ignored-folders', 'GET /prefs',
     'GET /sem-settings', 'GET /siblings', 'GET /summary', 'PATCH /sem-settings/:file', 'POST /accept-all', 'POST /admin/scan-all', 'POST /auto-link', 'POST /dismiss', 'POST /ignored-folders',
-    'POST /link', 'POST /rescan', 'POST /restore', 'POST /undo', 'PUT /prefs',
+    'POST /link', 'POST /relink', 'POST /rescan', 'POST /restore', 'POST /undo', 'PUT /prefs',
   ]);
 });
 
@@ -4415,7 +4415,11 @@ test('buildListQuery: the record option lists the files linked to one record thr
     const record = { collection, id: S1, exclude: ID(1) };
     for (const opts of [{ record }, { record, count: true }]) {
       const q = buildListQuery(scope, f, opts);
-      assert.match(q.sql, new RegExp(`c\\.linked_collection = \\? AND EXISTS \\(SELECT 1 FROM ${t.junction} rj WHERE rj\\.id = c\\.linked_junction_id AND rj\\.${t.fk} = \\?::uuid\\) AND c\\.candidate_id <> \\?::uuid`));
+      // driven from the record's side: the files in the record's junction rows (its unique index), then their candidates; the second test keeps a file only when the
+      // junction row ITS link made is on that record, so the answer is what it was before
+      assert.match(q.sql, new RegExp(`c\\.linked_collection = \\? AND c\\.directus_files_id IN \\(SELECT ri\\.directus_files_id FROM ${t.junction} ri WHERE ri\\.${t.fk} = \\?::uuid\\)`
+        + ` AND EXISTS \\(SELECT 1 FROM ${t.junction} rj WHERE rj\\.id = c\\.linked_junction_id AND rj\\.${t.fk} = \\?::uuid\\) AND c\\.candidate_id <> \\?::uuid`));
+      assert.equal(q.bindings.filter((b) => b === S1).length, 2, 'the record id is bound for the junction subquery and for the exactness test');
       assert.ok(q.bindings.includes(S1) && q.bindings.includes(ID(1)) && q.bindings.includes(collection), 'the record, the excluded file and the collection are bindings');
       assert.doesNotMatch(q.sql, new RegExp(`${S1}|${ID(1)}`), 'no id in the text');
       assert.match(q.sql, /c\.state = 'linked'/);
@@ -4425,7 +4429,7 @@ test('buildListQuery: the record option lists the files linked to one record thr
   // the bindings stay in the order of the placeholders: the clause comes after link_kind and before the paging
   const q = buildListQuery(scope, parseFileFilters({ tab: 'linked', link_kind: 'auto', limit: '5' }), { record: { collection: 'physical_samples', id: S1, exclude: ID(1) } });
   assert.equal(q.sql.match(/\?/g).length, q.bindings.length);
-  assert.deepEqual(q.bindings.slice(-6), ['auto', 'physical_samples', S1, ID(1), 5, 0]);
+  assert.deepEqual(q.bindings.slice(-7), ['auto', 'physical_samples', S1, S1, ID(1), 5, 0]);
 });
 
 // the file and the junction row its link made, on a world with Alice's sample S1
@@ -4503,7 +4507,8 @@ test('GET /siblings: an administrator reading someone else\'s file sees that own
   const [page] = listSql(w);
   assert.match(page.sql, /c\.owner_person_id = \?/);
   assert.ok(page.bindings.includes(P.alice), 'the file\'s owner, not the administrator');
-  assert.ok(!page.bindings.includes(P.admin));
+  assert.deepEqual(page.bindings.slice(0, 3), [true, P.admin, ''], 'the batch size counts what the administrator can see');
+  assert.ok(!page.bindings.slice(3).includes(P.admin), 'the rows are the file owner, not the administrator');
   // a team's file read by a team member: the member's default scope already holds the team
   const teamFile = add(w, cand({ owner_person_id: null, owner_team_id: TEAM, state: 'linked', linked_collection: 'physical_samples', linked_junction_id: ID(5004), link_batch_id: ID(93) }));
   w.junctions.sample_data_files.push({ id: ID(5004), sample_id: S1, directus_files_id: teamFile.directus_files_id });
@@ -4511,4 +4516,153 @@ test('GET /siblings: an administrator reading someone else\'s file sees that own
   const second = listSql(w).at(-1);
   assert.match(second.sql, /c\.owner_team_id = ANY/);
   assert.ok(second.bindings.includes(TEAM));
+});
+
+// ---- Change: POST /relink is one transaction; can_undo; the batch size the caller can see -----------------------------------------------------
+
+const relinkBody = (c, collection = 'manufacturing_operations', record = O1) => ({ candidate_id: c.candidate_id, collection, record_id: record });
+
+test('POST /relink: the file\'s own link is undone and the new one made in ONE transaction; its settings, a manual correction included, are never deleted', async () => {
+  const w = newWorld();
+  const c = add(w, cand({ extracted: SEM_EXTRACTED }));
+  const { call } = setup(w);
+  const first = (await call('POST /link', { user: U.alice, body: { items: [link(c)] } })).body.data;
+  w.settings.get(c.directus_files_id).sources.kv = 'manual';
+  w.settings.get(c.directus_files_id).kv = '99';
+  const before = w.txCount;
+  const logFrom = w.log.length;
+  const res = await call('POST /relink', { user: U.alice, body: relinkBody(c) });
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  assert.equal(w.txCount - before, 1, 'undo and link share one transaction');
+  assert.equal(res.body.data.linked, 1);
+  assert.notEqual(res.body.data.link_batch_id, first.link_batch_id, 'a new batch of one');
+  assert.deepEqual(res.body.data.items.map((i) => [i.candidate_id, i.collection, i.record_id]), [[c.candidate_id, 'manufacturing_operations', O1]]);
+  assert.equal(w.junctions.sample_data_files.length, 0, 'the old junction row is gone');
+  assert.deepEqual(w.junctions.operation_data_files.map((j) => [j.operation_id, j.directus_files_id]), [[O1, c.directus_files_id]]);
+  assert.equal(c.state, 'linked');
+  assert.equal(c.linked_collection, 'manufacturing_operations');
+  assert.equal(c.link_batch_id, res.body.data.link_batch_id);
+  assert.equal(c.decided_by, U.alice);
+  assert.equal(c.link_kind, 'manual');
+  const names = w.log.slice(logFrom).map((l) => l.name);
+  assert.ok(!names.includes('deleteUnlinkedSemSettings'), 'the file stays linked, so its settings are not touched');
+  assert.ok(!names.includes('relistDirs'), 'the file does not go back to the inbox');
+  assert.equal(w.settings.get(c.directus_files_id).kv, '99', 'the manual correction survives');
+  assert.equal(w.settings.get(c.directus_files_id).sources.kv, 'manual');
+  assert.ok(writesTo(w, 'sample_data_files').some((i) => i.op === 'delete' && i.accountability.user === U.alice), 'the old row was deleted as the caller');
+  assert.ok(writesTo(w, 'operation_data_files').every((i) => i.accountability.user === U.alice && i.knex?.isTransaction));
+});
+
+test('POST /relink: a new link that is refused changes NOTHING: the file stays on its old record, its settings stay', async () => {
+  const w = newWorld();
+  const c = add(w, cand({ extracted: SEM_EXTRACTED }));
+  const { call } = setup(w);
+  const first = (await call('POST /link', { user: U.alice, body: { items: [link(c)] } })).body.data;
+  w.settings.get(c.directus_files_id).sources.kv = 'manual';
+  w.settings.get(c.directus_files_id).kv = '99';
+  const junction = copy(w.junctions.sample_data_files);
+  const logFrom = w.log.length;
+  // S3 is a sample Alice may not edit (Dave's)
+  const refused = await call('POST /relink', { user: U.alice, body: relinkBody(c, 'physical_samples', S3) });
+  assert.equal(refused.statusCode, 403);
+  assert.equal(codeOf(refused), 'FORBIDDEN');
+  assert.equal(c.state, 'linked');
+  assert.equal(c.link_batch_id, first.link_batch_id, 'the old batch still stands');
+  assert.equal(c.linked_collection, 'physical_samples');
+  assert.deepEqual(w.junctions.sample_data_files, junction, 'the old junction row is back');
+  assert.equal(w.junctions.operation_data_files.length, 0);
+  assert.equal(w.settings.get(c.directus_files_id).kv, '99');
+  assert.equal(w.settings.get(c.directus_files_id).sources.kv, 'manual');
+  assert.ok(!w.log.slice(logFrom).some((l) => l.name === 'deleteUnlinkedSemSettings'), 'a relink never deletes the settings');
+  // a Restricted record the caller cannot read, and one that does not exist, are refused the same way
+  assert.equal((await call('POST /relink', { user: U.alice, body: relinkBody(c, 'physical_samples', S2) })).statusCode, 403);
+  const gone = await call('POST /relink', { user: U.alice, body: relinkBody(c, 'physical_samples', MISSING) });
+  assert.ok([403, 404].includes(gone.statusCode), String(gone.statusCode));
+  assert.equal(c.link_batch_id, first.link_batch_id);
+  assert.equal(w.junctions.sample_data_files.length, 1);
+});
+
+test('POST /relink: only that file of its batch moves; the others stay linked to the old record', async () => {
+  const w = newWorld();
+  const a = add(w, cand());
+  const b = add(w, cand());
+  const { call } = setup(w);
+  const batch = (await call('POST /link', { user: U.alice, body: { items: [link(a), link(b)] } })).body.data.link_batch_id;
+  const res = await call('POST /relink', { user: U.alice, body: relinkBody(a) });
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  assert.equal(a.linked_collection, 'manufacturing_operations');
+  assert.equal(b.state, 'linked');
+  assert.equal(b.link_batch_id, batch, 'the other file keeps its batch');
+  assert.deepEqual(w.junctions.sample_data_files.map((j) => j.directus_files_id), [b.directus_files_id]);
+});
+
+test('POST /relink: the rules of undo and link: the linker only, an administrator who is not the owner is read-only, a file that is not linked to a record is 409, a bad body is 400', async () => {
+  const w = newWorld();
+  const team = add(w, cand({ owner_person_id: null, owner_team_id: TEAM }));
+  const fresh = add(w, cand());
+  const { call } = setup(w);
+  await call('POST /link', { user: U.alice, body: { items: [link(team)] } });
+  const batch = team.link_batch_id;
+  const unchanged = () => assert.ok(team.state === 'linked' && team.link_batch_id === batch && w.junctions.sample_data_files.length === 1, 'nothing changed');
+  const bob = await call('POST /relink', { user: U.bob, body: relinkBody(team, 'physical_samples', S1) });
+  assert.equal(bob.statusCode, 403, 'a teammate sees the file, but the link is the linker\'s');
+  unchanged();
+  const admin = await call('POST /relink', { user: U.admin, admin: true, role: ID(80), body: relinkBody(team) });
+  assert.equal(admin.statusCode, 403);
+  assert.equal(codeOf(admin), 'FORBIDDEN');
+  unchanged();
+  assert.equal((await call('POST /relink', { user: U.carol, body: relinkBody(team) })).statusCode, 404, 'not Carol\'s to see');
+  const notLinked = await call('POST /relink', { user: U.alice, body: relinkBody(fresh) });
+  assert.equal(notLinked.statusCode, 409);
+  assert.equal(codeOf(notLinked), 'NOT_LINKED');
+  assert.equal(fresh.state, 'new');
+  const scan = add(w, cand({ kind: 'surface_scan', state: 'linked', link_batch_id: ID(990), linked_collection: 'surface_scans', linked_junction_id: ID(6100), decided_by: U.alice }));
+  assert.equal(codeOf(await call('POST /relink', { user: U.alice, body: relinkBody(scan) })), 'NOT_LINKED');
+  assert.equal(codeOf(await call('POST /relink', { user: U.alice, body: relinkBody({ candidate_id: ID(9999) }) })), 'NOT_FOUND');
+  const txs = w.txCount;
+  for (const body of [undefined, {}, { ...relinkBody(team), record_id: 'x' }, { ...relinkBody(team), candidate_id: 'x' }, { ...relinkBody(team), collection: 'surface_scans' }, { ...relinkBody(team), collection: 'nope' }]) {
+    assert.equal((await call('POST /relink', { user: U.alice, body })).statusCode, 400);
+  }
+  assert.equal(w.txCount, txs, 'no transaction for a bad body');
+  assert.equal((await call('POST /relink', { body: relinkBody(team) })).statusCode, 401);
+  // an administrator who is a member of the owner team may, as for undo
+  w.teamMembers.push({ team_id: TEAM, person_id: P.admin });
+  w.editable[U.admin] = { physical_samples: new Set(), manufacturing_operations: new Set([O1]), test_sessions: new Set() };
+  assert.equal((await call('POST /relink', { user: U.admin, admin: true, role: ID(80), body: relinkBody(team) })).statusCode, 200);
+});
+
+test('FoundFile.can_undo: true only for a linked row the caller could undo (they linked it, or are an administrator who may change the file); false for every other row', async () => {
+  const w = newWorld();
+  const mine = listRow(cand({ state: 'linked' }), { state: 'linked', decided_by: U.alice, link_kind: 'manual', linked_collection: 'physical_samples', linked_record_id: S1, link_batch_id: ID(77) });
+  const teammates = listRow(cand({ state: 'linked' }), { state: 'linked', decided_by: U.bob, owner_person_id: null, owner_team_id: TEAM, link_kind: 'manual', linked_collection: 'physical_samples', linked_record_id: S1, link_batch_id: ID(78) });
+  const fresh = listRow(cand(), { state: 'new', decided_by: null });
+  w.listRows = [mine, teammates, fresh];
+  const { call } = setup(w);
+  const asAlice = (await call('GET /files', { user: U.alice, query: { tab: 'linked' } })).body.data;
+  assert.deepEqual(asAlice.map((r) => r.can_undo), [true, false, false], 'Alice may undo what she linked, not what Bob linked in the team folder, and a new file has nothing to undo');
+  assert.ok(asAlice.every((r) => typeof r.can_undo === 'boolean'));
+  const asBob = (await call('GET /files', { user: U.bob, query: { tab: 'linked' } })).body.data;
+  assert.deepEqual(asBob.map((r) => r.can_undo), [false, true, false], 'Alice\'s own file is not Bob\'s to change; the team file he linked is his to undo');
+  // an administrator reads Alice's file and may not change it, so may not undo it
+  const asAdmin = (await call('GET /files', { user: U.admin, admin: true, query: { tab: 'linked', owner: `person:${P.alice}` } })).body.data;
+  assert.equal(asAdmin[0].can_undo, false);
+  // the same rule as the routes apply, for the same rows
+  const scope = { personId: P.alice, teamIds: [TEAM], admin: false };
+  for (const [row, want] of [[mine, true], [teammates, false], [fresh, false]]) assert.equal(canUndoRow(scope, row, U.alice), want);
+  assert.equal(canUndoRow(scope, mine, undefined), false, 'no user id, no undo');
+  assert.equal(fileOut(mine, { readable: new Set(), labels: new Map(), editable: new Set() }).can_undo, false, 'no viewer given: fails closed');
+});
+
+test('buildListQuery: link_batch_size counts only the batch files the caller can see (their folders and teams, everything for an administrator); the count query does not carry it', () => {
+  const alice = { personId: P.alice, teamIds: [TEAM, OTHER_TEAM], admin: false };
+  const admin = { personId: P.admin, teamIds: [], admin: true };
+  const f = parseFileFilters({ tab: 'linked' });
+  const q = buildListQuery(alice, f);
+  assert.match(q.sql, /\(SELECT count\(\*\)::int FROM d1_private\.file_candidates bc WHERE bc\.link_batch_id = c\.link_batch_id AND bc\.state = 'linked' AND NOT EXISTS \(SELECT 1 FROM directus_files pf WHERE pf\.id = bc\.directus_files_id .* AND \(\?::boolean OR bc\.owner_person_id = \? OR bc\.owner_team_id = ANY\(string_to_array\(\?, ','\)::uuid\[\]\)\)\) END AS link_batch_size/);
+  assert.deepEqual(q.bindings.slice(0, 3), [false, P.alice, `${TEAM},${OTHER_TEAM}`], 'the three bindings of the batch count come first');
+  assert.equal(q.sql.match(/\?/g).length, q.bindings.length);
+  assert.deepEqual(buildListQuery(admin, f).bindings.slice(0, 3), [true, P.admin, '']);
+  assert.deepEqual(buildListQuery({ personId: null, teamIds: [], admin: false }, f).bindings.slice(0, 3), [false, null, ''], 'a login with no person counts nothing');
+  assert.doesNotMatch(buildListQuery(alice, f, { count: true }).sql, /bc\./);
+  assert.match(q.sql, /c\.decided_by,/, 'the row says who linked it (can_undo)');
 });

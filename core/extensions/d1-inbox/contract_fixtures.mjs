@@ -23,6 +23,8 @@ export const FIXTURE_DIR = fileURLToPath(new URL('../../../tests/fixtures/d1-inb
 // ---- fixed ids and times ----------------------------------------------------------------------------------------------------
 const ID = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const P_ALICE = ID(11);
+const U_ALICE = ID(1); // her login
+const U_TEAMMATE = ID(2);
 const TEAM = ID(21);
 const TEAM_NO_FOLDER = ID(22);
 const S_EDIT = ID(101); // a sample the caller can edit ("S-0042")
@@ -52,7 +54,7 @@ const row = (over) => ({
   origin: 'new', state: 'new', match_strength: 'none', matches: [], suggested_collection: null, suggested_record_id: null, duplicate_of: null,
   duplicate_of_owner: null, duplicate_owner_person_id: null, duplicate_owner_team_id: null, rel_path: 'Users/ali1/file.tif', size_bytes: '2500000', source_mtime: at('2026-10-10T09:00:00.000Z'),
   first_seen_at: at('2026-10-11T09:00:00.000Z'), decided_at: null, link_kind: null, linked_collection: null, link_batch_id: null, linked_record_id: null,
-  decided_by_name: null, owner_person_id: P_ALICE, owner_team_id: null, owner_name: 'Alice A', adopted_at: null, has_thumbnail: false, ...over,
+  decided_by: null, decided_by_name: null, owner_person_id: P_ALICE, owner_team_id: null, owner_name: 'Alice A', adopted_at: null, has_thumbnail: false, ...over,
 });
 const named = (id, token, via = 'short_id') => [{ collection: 'physical_samples', record_id: id, via, token }];
 const suggest = (id) => ({ suggested_collection: 'physical_samples', suggested_record_id: id });
@@ -105,23 +107,23 @@ const BACKLOG_EXACT = row({
 const LINKED_AUTO = row({
   candidate_id: ID(1008), directus_files_id: ID(3008), name: '3fa9c1d2_A2.tif', kind: 'sem_image', kind_confidence: '0.95', state: 'linked',
   match_strength: 'short_id', matches: named(S_EDIT, '3fa9c1d2'), ...suggest(S_EDIT), rel_path: 'Users/ali1/sem/3fa9c1d2_A2.tif', decided_at: at('2026-10-14T16:00:00.000Z'),
-  link_kind: 'auto', linked_collection: 'physical_samples', linked_record_id: S_EDIT, link_batch_id: BATCH, link_batch_size: 1, decided_by_name: 'Alice A', adopted_at: null, has_thumbnail: true,
+  link_kind: 'auto', linked_collection: 'physical_samples', linked_record_id: S_EDIT, link_batch_id: BATCH, link_batch_size: 1, decided_by: U_ALICE, decided_by_name: 'Alice A', adopted_at: null, has_thumbnail: true,
 });
 // Another picture linked to the same sample (a sibling of LINKED_AUTO), in a batch of two.
 const LINKED_SIBLING = row({
   candidate_id: ID(1015), directus_files_id: ID(3015), name: '3fa9c1d2_A3.tif', kind: 'sem_image', kind_confidence: '0.95', state: 'linked',
   match_strength: 'short_id', matches: named(S_EDIT, '3fa9c1d2'), ...suggest(S_EDIT), rel_path: 'Users/ali1/sem/3fa9c1d2_A3.tif', decided_at: at('2026-10-14T15:00:00.000Z'),
-  link_kind: 'bulk', linked_collection: 'physical_samples', linked_record_id: S_EDIT, link_batch_id: ID(904), link_batch_size: 2, decided_by_name: 'Alice A', adopted_at: null, has_thumbnail: true,
+  link_kind: 'bulk', linked_collection: 'physical_samples', linked_record_id: S_EDIT, link_batch_id: ID(904), link_batch_size: 2, decided_by: U_TEAMMATE, decided_by_name: 'Bob B', adopted_at: null, has_thumbnail: true,
 });
 const LINKED_MANUAL = row({
   candidate_id: ID(1009), directus_files_id: ID(3009), name: 'S-0042_notes.pdf', mime_type: 'application/pdf', kind: 'document', kind_confidence: null, state: 'linked',
   match_strength: 'code', matches: named(S_EDIT, 'S-0042', 'code'), ...suggest(S_EDIT), rel_path: 'Users/ali1/reports/S-0042_final.pdf', decided_at: at('2026-10-14T17:30:00.000Z'),
-  link_kind: 'manual', linked_collection: 'physical_samples', linked_record_id: S_EDIT, link_batch_id: ID(902), link_batch_size: 1, decided_by_name: 'Alice A', adopted_at: at('2026-10-14T17:30:00.000Z'),
+  link_kind: 'manual', linked_collection: 'physical_samples', linked_record_id: S_EDIT, link_batch_id: ID(902), link_batch_size: 1, decided_by: U_ALICE, decided_by_name: 'Alice A', adopted_at: at('2026-10-14T17:30:00.000Z'),
 });
 const LINKED_SCAN = row({
   candidate_id: ID(1012), directus_files_id: ID(3012), name: 'H13A-2_fC_worn.al3d', mime_type: null, kind: 'surface_scan', kind_confidence: '1.00', state: 'linked',
   rel_path: 'Users/ali1/alicona/H13A-2_fC_worn.al3d', size_bytes: '52428800', decided_at: at('2026-10-15T09:30:00.000Z'), link_kind: 'manual',
-  linked_collection: 'surface_scans', linked_record_id: SCAN, link_batch_id: ID(903), decided_by_name: 'Alice A', adopted_at: null,
+  linked_collection: 'surface_scans', linked_record_id: SCAN, link_batch_id: ID(903), decided_by: U_ALICE, decided_by_name: 'Alice A', adopted_at: null,
 });
 const DOC_EXACT = row({
   candidate_id: ID(1011), directus_files_id: ID(3011), name: '3fa9c1d2_report.pdf', mime_type: 'application/pdf', kind: 'document', kind_confidence: null,
@@ -136,6 +138,8 @@ const DISMISSED = row({
 const INFO = {
   // who is asking (Alice, in the SEM team): a copy names the owner of its original only for her own folder and her teams
   viewer: { personId: P_ALICE, teamIds: [TEAM], admin: false },
+  // and her login, for can_undo: she may undo what she linked
+  userId: U_ALICE,
   readable: new Set([`physical_samples:${S_EDIT}`, `physical_samples:${S_VIEW}`, `surface_scans:${SCAN}`, `insert_edges:${EDGE}`]),
   labels: new Map([[`physical_samples:${S_EDIT}`, 'S-0042'], [`physical_samples:${S_VIEW}`, 'S-0050'], [`surface_scans:${SCAN}`, 'H13A-#2-fC (worn)'], [`insert_edges:${EDGE}`, 'H13A-#2-fC']]),
   editable: new Set([`physical_samples:${S_EDIT}`]),
@@ -252,6 +256,12 @@ export function buildFixtures() {
   put('link_already_linked', ok('the same person repeats the same link: no new batch, a count of 0', linkReq(oneLink),
     { data: shapeLink({ link_batch_id: null, newly: 0, items: linkedItems([{ cand: NEW_ORIGINAL }]).map((i) => ({ ...i, already_linked: true })) }) }));
   put('link_403_not_editable', failure('the caller cannot edit the record', linkReq(oneLink), ERRORS.notEditable(ID(1001), 'physical_samples', S_EDIT)));
+  // POST /relink: Change a linked file's record in one transaction (the answer is a link's: a new batch of one); a refusal changes nothing
+  const relinkReq = (collection, recordId) => request('POST', '/d1-inbox/relink', { body: { candidate_id: ID(1008), collection, record_id: recordId } });
+  put('relink_ok', ok('a linked file moved to another record: its old link is undone and the new one made in one transaction', relinkReq('physical_samples', S_EDIT),
+    { data: shapeLink({ link_batch_id: ID(905), newly: 1, items: linkedItems([{ cand: LINKED_AUTO }]) }) }));
+  put('relink_403_not_editable', failure('the caller cannot edit the new record: the file stays on its old one', relinkReq('physical_samples', S_VIEW), ERRORS.notEditable(ID(1008), 'physical_samples', S_VIEW)));
+  put('relink_409_not_linked', failure('the file is not linked to a sample, operation or test', relinkReq('physical_samples', S_EDIT), ERRORS.notLinked(ID(1008))));
   put('link_409_already_linked', failure('someone else linked the file first', linkReq(oneLink), ERRORS.alreadyLinked(ID(1001))));
   put('link_409_already_on_record', failure('the file is already on the record (linked in Data Studio)', linkReq(oneLink), ERRORS.alreadyOnRecord(ID(1001))));
   put('link_409_surface_scan', failure('a surface scan is never linked to a sample, operation or test: it is added to an insert or an edge',

@@ -5,7 +5,8 @@ import type { FoundFile } from './inboxApi';
 import { changeBlocked, linkCardView, undoConfirmText } from './linkedModel';
 
 // The Link card (the maintainer's pick A): where a linked file went, by whom and when, with Open (the record's page), Change… (the Link dialog, the page's) and
-// Undo link (an inline confirm that says how many files the undo takes with it: a batch is undone whole). An unlinked file shows nothing. It only reports what
+// Undo link (an inline confirm that says how many files the undo takes with it: a batch is undone whole); the last two only when the server says the caller may
+// undo this link (can_undo: the person who linked it). An unlinked file shows nothing. It only reports what
 // was asked; the sheet, the view box's left panel and the view box page each do it through the same Inbox actions, so a refusal shows in their notice.
 const props = defineProps<{
 	file: FoundFile;
@@ -57,10 +58,10 @@ watch(
 		</div>
 		<div class="row">
 			<button v-if="view.route" type="button" class="d1-btn pri" data-test="link-open" @click="emit('open', view.route)">{{ view.openLabel }}</button>
-			<button v-if="!view.scan" type="button" class="d1-btn" :disabled="busy || !!blocked" :aria-describedby="blocked ? 'link-change-why' : undefined" data-test="link-change" @click="emit('change')">Change…</button>
-			<button ref="undoBtn" type="button" class="d1-btn" :disabled="busy || confirming" data-test="link-undo" @click="confirming = true">Undo link</button>
+			<button v-if="!view.scan && view.canUndo" type="button" class="d1-btn" :disabled="busy || !!blocked" :aria-describedby="blocked ? 'link-change-why' : undefined" data-test="link-change" @click="emit('change')">Change…</button>
+			<button v-if="view.canUndo" ref="undoBtn" type="button" class="d1-btn" :disabled="busy || confirming" data-test="link-undo" @click="confirming = true">Undo link</button>
 		</div>
-		<p v-if="blocked && !view.scan" id="link-change-why" class="hint" data-test="link-change-why">{{ blocked }}</p>
+		<p v-if="blocked && !view.scan && view.canUndo" id="link-change-why" class="hint" data-test="link-change-why">{{ blocked }}</p>
 		<!-- the live region is always in the page, so a confirm that opens in it is announced -->
 		<div class="slot" aria-live="polite">
 			<div v-if="confirming" class="confirm" role="group" aria-label="Undo this link" data-test="link-confirm" @keydown.esc.stop.prevent="cancel">

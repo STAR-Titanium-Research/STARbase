@@ -42,6 +42,7 @@
         "linked_title": null,
         "link_batch_size": null,
         "decided_by_name": "Alice A",
+        "can_undo": true,
         "owner": {
           "kind": "person",
           "id": "00000000-0000-4000-8000-000000000011",

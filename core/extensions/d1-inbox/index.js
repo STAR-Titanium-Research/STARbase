@@ -29,7 +29,9 @@
 //                                      sem_image only; a failure marker row, thumb NULL, does not count). The bytes are never part of the list.
 //                                      FoundFile.linked_title (additive, Linked tab only): the linked record's second line as the caller may read it
 //                                      (a sample's nickname, a test's type; null for an operation or when unreadable); FoundFile.link_batch_size
-//                                      (additive): how many files the row's link batch holds (Undo undoes them all), null when the row is not linked.
+//                                      (additive): how many files the row's link batch holds that the caller can SEE (Undo undoes them all), null when the row is not linked.
+//                                      FoundFile.can_undo (additive, boolean): true only for a linked row the caller could undo or change now (they may change the file and
+//                                      they linked it or are an administrator: the rule of POST /undo); false for any other row.
 //   GET  /d1-inbox/siblings?file=<candidate_id>&limit=
 //                                   -> { data: FoundFile[], meta: { total, limit } }: the OTHER pictures (sem_image, image) linked to the same sample,
 //                                      operation or test as that file, newest link first, with the list's own visibility (the caller's folders and their
@@ -81,6 +83,11 @@
 //                                   as the caller: 403 when they may no longer delete) -> { data: { undone: <count> } }. A file's imaging settings go with
 //                                   its LAST link: they are deleted only when no row is left in sample_data_files, operation_data_files, session_data_files or
 //                                   surface_scans for that file (a file linked to two records keeps them while one link stands).
+//   POST /d1-inbox/relink           { candidate_id, collection, record_id }   Change a LINKED file's record, atomically: undoes that one file's link (whatever its batch) and
+//                                   links it to the new record in ONE transaction, so a refused new link (403 NOT_EDITABLE, 404, 409 ALREADY_ON_RECORD) changes nothing: the file
+//                                   stays on its old record and its imaging settings stay. Same rules as /undo (403 FORBIDDEN unless the caller linked it; an administrator who
+//                                   does not own the file is 403 read-only) and as /link; 409 NOT_LINKED for a file that is not linked to a sample, operation or test.
+//                                   -> the answer of /link (a new batch of one).
 //   POST /d1-inbox/rescan           queue a person-scope scan -> 202 { data: { queued: true, ... } }; 429 (extensions.retry_after_seconds) within
 //                                   10 minutes of the last request, or while one is queued or running
 //   GET  /d1-inbox/prefs, PUT /d1-inbox/prefs { auto_link: boolean }
@@ -533,6 +540,13 @@ export function canChange(scope, candidate) {
   return Boolean(candidate.owner_team_id) && scope.teamIds.includes(candidate.owner_team_id);
 }
 
+// Who may undo a LINKED file's link (POST /undo and /relink, and FoundFile.can_undo, which the page reads to offer Undo and Change): a person who may change the file
+// (canChange: an administrator who is not its owner reads it, never changes it) and either linked it or is an administrator. `userId` is the caller's user id.
+export function canUndoRow(scope, row, userId) {
+  if (row.state !== 'linked' || !canChange(scope, row)) return false;
+  return scope.admin === true || (!isBlank(userId) && row.decided_by === userId);
+}
+
 // How a caller stands to a file (its pointer row's owner columns): 'owner' (the owner person, or a member of the owner team: canChange), 'unowned' (no
 // owner stamp: legacy and linked files stay open, D10) or 'other' (someone else's file).
 export function semAccess(scope, file) {
@@ -552,6 +566,7 @@ const rateLimited = (wait) => new HttpError(429, 'RATE_LIMITED', 'Your folder wa
 export const ERRORS = {
   notEditable: (candidateId, collection, recordId) =>
     new HttpError(403, 'FORBIDDEN', 'You can only link a file to a record you can edit.', { candidate_id: candidateId, collection, record_id: recordId }),
+  notLinked: (candidateId) => new HttpError(409, 'NOT_LINKED', 'That file is not linked to a sample, operation or test, so there is no link to change.', { candidate_id: candidateId }),
   alreadyOnRecord: (candidateId) => new HttpError(409, 'ALREADY_ON_RECORD', 'That file is already linked to that record. Dismiss clears it.', { candidate_id: candidateId }),
   dealtWith: (candidateId) => new HttpError(409, 'ALREADY_LINKED', 'Someone already dealt with that file.', { candidate_id: candidateId }),
   alreadyLinked: (candidateId) => new HttpError(409, 'ALREADY_LINKED', 'That file was already linked.', { candidate_id: candidateId }),
@@ -691,14 +706,18 @@ export function parseFileFilters(source, { defaultTab = 'new' } = {}) {
   };
 }
 
+// The files of a link batch the caller may SEE (canSee, as the undo reads them): the "N files" an Undo would take is never more than the caller can count. The three
+// bindings it takes come first in a list query (buildListQuery): an administrator, the caller's person id, their teams' ids as one csv.
+const BATCH_OWNER_MATCHES = FILE_OWNER_MATCHES.replaceAll(' c.', ' bc.'); // the same predicate, for the batch's files
 const LIST_SELECT = 'SELECT c.candidate_id, c.directus_files_id, f.filename_download AS name, f.type AS mime_type, c.kind, c.kind_confidence,'
   + ' c.extracted, c.origin, c.state, c.match_strength, c.matches, c.suggested_collection, c.suggested_record_id, c.duplicate_of,'
   + ' coalesce(cp.full_name, ct.name) AS duplicate_of_owner, o.owner_person_id AS duplicate_owner_person_id, o.owner_team_id AS duplicate_owner_team_id,'
   + ' c.rel_path, c.size_bytes, c.source_mtime, c.first_seen_at, c.decided_at, c.link_kind, c.linked_collection, c.link_batch_id,'
   + " coalesce(sj.sample_id, oj.operation_id, tj.session_id, CASE WHEN c.linked_collection = 'surface_scans' THEN c.linked_junction_id END) AS linked_record_id,"
   + " coalesce(nullif(btrim(coalesce(du.first_name, '') || ' ' || coalesce(du.last_name, '')), ''), du.email) AS decided_by_name,"
-  + " CASE WHEN c.link_batch_id IS NOT NULL THEN (SELECT count(*)::int FROM d1_private.file_candidates bc WHERE bc.link_batch_id = c.link_batch_id AND bc.state = 'linked') END AS link_batch_size,"
-  + ' c.owner_person_id, c.owner_team_id, coalesce(op.full_name, ot.name) AS owner_name, c.adopted_at,'
+  + " CASE WHEN c.link_batch_id IS NOT NULL THEN (SELECT count(*)::int FROM d1_private.file_candidates bc WHERE bc.link_batch_id = c.link_batch_id AND bc.state = 'linked'"
+  + ` AND ${BATCH_OWNER_MATCHES} AND (?::boolean OR bc.owner_person_id = ? OR bc.owner_team_id = ANY(${IDS}))) END AS link_batch_size,`
+  + ' c.owner_person_id, c.owner_team_id, c.decided_by, coalesce(op.full_name, ot.name) AS owner_name, c.adopted_at,'
   + ' EXISTS (SELECT 1 FROM d1_private.file_thumbnails th WHERE th.candidate_id = c.candidate_id AND th.thumb IS NOT NULL) AS has_thumbnail';
 const LIST_FROM = ' FROM d1_private.file_candidates c'
   + ' LEFT JOIN directus_files f ON f.id = c.directus_files_id'
@@ -736,12 +755,14 @@ export function buildListQuery(scope, f, { count = false, accept = false, after 
   if (f.date_from) { where.push('coalesce(c.source_mtime, c.first_seen_at) >= ?::date'); bindings.push(f.date_from); }
   if (f.date_to) { where.push('coalesce(c.source_mtime, c.first_seen_at) < (?::date + 1)'); bindings.push(f.date_to); }
   if (f.link_kind) { where.push('c.link_kind = ?'); bindings.push(f.link_kind); }
-  // { collection, id, exclude } (the siblings route, never a client key): only files linked to that record, found through the junction row the link made
-  // (not the sj / oj / tj joins, which the count query lacks), and not the file `exclude`
+  // { collection, id, exclude } (the siblings route, never a client key): only files linked to that record, and not the file `exclude`. Driven from the record's side:
+  // the files in the record's junction rows (the junction's index on its record column, a handful of rows), then the candidates of those files; the second test keeps a
+  // file only when the junction row ITS link made is on that record (not the sj / oj / tj joins, which the count query lacks)
   if (record) {
     const t = LINK_TARGETS[record.collection];
-    where.push('c.linked_collection = ?', `EXISTS (SELECT 1 FROM ${t.junction} rj WHERE rj.id = c.linked_junction_id AND rj.${t.fk} = ?::uuid)`, 'c.candidate_id <> ?::uuid');
-    bindings.push(record.collection, record.id, record.exclude);
+    where.push('c.linked_collection = ?', `c.directus_files_id IN (SELECT ri.directus_files_id FROM ${t.junction} ri WHERE ri.${t.fk} = ?::uuid)`,
+      `EXISTS (SELECT 1 FROM ${t.junction} rj WHERE rj.id = c.linked_junction_id AND rj.${t.fk} = ?::uuid)`, 'c.candidate_id <> ?::uuid');
+    bindings.push(record.collection, record.id, record.id, record.exclude);
   }
   if (accept) {
     // What accept-all can ever link: exact short ID naming one record, not a surface scan, not a copy, not already on its record
@@ -756,7 +777,8 @@ export function buildListQuery(scope, f, { count = false, accept = false, after 
   const order = f.tab === 'linked' || f.tab === 'dismissed'
     ? 'ORDER BY c.decided_at DESC NULLS LAST, c.candidate_id'
     : 'ORDER BY c.first_seen_at DESC, c.candidate_id';
-  return { sql: `${LIST_SELECT}${LIST_FROM} WHERE ${where.join(' AND ')} ${order} LIMIT ? OFFSET ?`, bindings: [...bindings, f.limit, f.offset] };
+  const batchScope = [scope.admin === true, mine ? scope.personId : null, scope.teamIds.join(',')];
+  return { sql: `${LIST_SELECT}${LIST_FROM} WHERE ${where.join(' AND ')} ${order} LIMIT ? OFFSET ?`, bindings: [...batchScope, ...bindings, f.limit, f.offset] };
 }
 
 // The grouped counts of the summary query as the answer, in the shape STARbase's inboxSummary.ts reads: the person's (with has_alias), and each
@@ -840,6 +862,8 @@ export function fileOut(row, info) {
     linked_title: linked ? (info.titles?.get(key(row.linked_collection, row.linked_record_id)) ?? null) : null,
     link_batch_size: linked ? num(row.link_batch_size) : null,
     decided_by_name: row.decided_by_name ?? null,
+    // would POST /undo (and /relink, Change) take this file's link from the caller: the same rule the server applies, so the page offers only what works
+    can_undo: Boolean(info.viewer) && canUndoRow(info.viewer, row, info.userId),
     owner: row.owner_person_id
       ? { kind: 'person', id: row.owner_person_id, name: row.owner_name ?? '' }
       : { kind: 'team', id: row.owner_team_id, name: row.owner_name ?? '' },
@@ -1350,6 +1374,63 @@ export function mount(router, context, deps = {}) {
     return linked;
   }
 
+  // The body of a link, inside the caller's transaction: lock the candidates, sort them, check the edit rights (all or nothing), then write. A refusal throws and
+  // whoever opened the transaction rolls everything back. `wanted` = [{ id, collection, recordId, scan? }], already validated.
+  async function linkWithin(trx, { acc, schema, scope, wanted, linkKind }) {
+    const rows = new Map(rowsOf(await trx.raw(SQL.candidatesForUpdate, [wanted.map((w) => w.id).join(',')])).map((r) => [r.candidate_id, r]));
+    const fresh = [];
+    const again = [];
+    for (const w of wanted) {
+      const cand = rows.get(w.id);
+      if (!cand || !canSee(scope, cand)) throw ERRORS.notInInbox(w.id);
+      // an administrator reads other people's files but never links them (ADR-0022): only the owner or a member of the owner team
+      if (!canChange(scope, cand)) throw ERRORS.adminReadOnly(w.id);
+      if (cand.state === 'new') {
+        // a surface scan is ADDED to an insert or edge with a person-chosen condition (stream F1), never linked to a sample, operation or test;
+        // and only a surface scan is added that way
+        if (w.collection === SURFACE_SCANS) {
+          if (cand.kind !== 'surface_scan') throw ERRORS.notASurfaceScan(w.id);
+        } else if (cand.kind === 'surface_scan') {
+          throw ERRORS.surfaceScan(w.id);
+        }
+        fresh.push({ cand, collection: w.collection, recordId: w.recordId, scan: w.scan });
+        continue;
+      }
+      if (cand.state === 'linked') {
+        // the same person repeating the same link (or the same surface scan add): nothing more to do
+        const mine = cand.decided_by === acc.user && cand.linked_collection === w.collection && cand.linked_junction_id;
+        if (mine && w.collection === SURFACE_SCANS) {
+          const [scanRow] = rowsOf(await trx.raw(SQL.scanById, [cand.linked_junction_id]));
+          if (!scanRow || (scanRow.insert_id ?? null) !== w.scan.insertId || (scanRow.edge_id ?? null) !== w.scan.edgeId) throw ERRORS.alreadyLinked(w.id);
+          again.push({ ...linkedItemOut({ cand, collection: w.collection, scan: w.scan }, cand.linked_junction_id, false), already_linked: true });
+          continue;
+        }
+        const same = mine && w.collection !== SURFACE_SCANS
+          && rowsOf(await trx.raw(SQL.junctionById[w.collection], [cand.linked_junction_id]))[0]?.record_id === w.recordId;
+        if (!same) throw ERRORS.alreadyLinked(w.id);
+        again.push({ candidate_id: w.id, collection: w.collection, record_id: w.recordId, junction_id: cand.linked_junction_id, adopted: !IMAGE_KINDS.includes(cand.kind), already_linked: true });
+        continue;
+      }
+      if (cand.state === 'gone') throw new HttpError(409, 'FILE_GONE', 'That file is no longer on the share.', { candidate_id: w.id });
+      throw new HttpError(409, 'NOT_NEW', 'Restore that file before linking it.', { candidate_id: w.id });
+    }
+    // The edit check, before anything is written: all or nothing.
+    // (a surface scan has no record-edit rule: Directus's own create permission on surface_scans decides, and the records it names are read as the caller)
+    const links = fresh.filter((e) => e.collection !== SURFACE_SCANS);
+    const editable = await editableSet(trx, acc, schema, links.map((e) => [e.collection, e.recordId]));
+    for (const e of links) if (!editable.has(`${e.collection}:${e.recordId}`)) throw ERRORS.notEditable(e.cand.candidate_id, e.collection, e.recordId);
+    const there = await existingLinks(trx, links.map((e) => ({ collection: e.collection, recordId: e.recordId, fileId: e.cand.directus_files_id })));
+    for (const e of links) if (there.has(linkKey(e.collection, e.recordId, e.cand.directus_files_id))) throw ERRORS.alreadyOnRecord(e.cand.candidate_id);
+    // a file that already has a surface scan (added through the Alicona dialog, or by someone else) is treated like an already-linked file: 409 up front,
+    // before any record is read or written (the unique constraints would also refuse the same insert or edge, but not another one)
+    await requireNoScan(trx, fresh);
+    await requireScanRefs(trx, { acc, schema, entries: fresh });
+    // nothing newly linked (the same person repeating a link): no batch, a count of 0, never the old batch id
+    const batchId = fresh.length ? newId() : null;
+    const linked = fresh.length ? await performLink(trx, { acc, schema, entries: fresh, linkKind, batchId }) : [];
+    return { link_batch_id: batchId, newly: linked.length, items: [...linked, ...again], wrote: fresh.length > 0 };
+  }
+
   router.post('/link', route(async ({ req, res, acc }) => {
     const body = bodyOf(req);
     const items = body?.items;
@@ -1371,60 +1452,7 @@ export function mount(router, context, deps = {}) {
     const schema = await schemaOf(req);
     const scope = await scopeOf(acc);
     const linkKind = wanted.length === 1 ? 'manual' : 'bulk';
-    const out = await inTransaction(acc.user, async (trx) => {
-      const rows = new Map(rowsOf(await trx.raw(SQL.candidatesForUpdate, [wanted.map((w) => w.id).join(',')])).map((r) => [r.candidate_id, r]));
-      const fresh = [];
-      const again = [];
-      for (const w of wanted) {
-        const cand = rows.get(w.id);
-        if (!cand || !canSee(scope, cand)) throw ERRORS.notInInbox(w.id);
-        // an administrator reads other people's files but never links them (ADR-0022): only the owner or a member of the owner team
-        if (!canChange(scope, cand)) throw ERRORS.adminReadOnly(w.id);
-        if (cand.state === 'new') {
-          // a surface scan is ADDED to an insert or edge with a person-chosen condition (stream F1), never linked to a sample, operation or test;
-          // and only a surface scan is added that way
-          if (w.collection === SURFACE_SCANS) {
-            if (cand.kind !== 'surface_scan') throw ERRORS.notASurfaceScan(w.id);
-          } else if (cand.kind === 'surface_scan') {
-            throw ERRORS.surfaceScan(w.id);
-          }
-          fresh.push({ cand, collection: w.collection, recordId: w.recordId, scan: w.scan });
-          continue;
-        }
-        if (cand.state === 'linked') {
-          // the same person repeating the same link (or the same surface scan add): nothing more to do
-          const mine = cand.decided_by === acc.user && cand.linked_collection === w.collection && cand.linked_junction_id;
-          if (mine && w.collection === SURFACE_SCANS) {
-            const [scanRow] = rowsOf(await trx.raw(SQL.scanById, [cand.linked_junction_id]));
-            if (!scanRow || (scanRow.insert_id ?? null) !== w.scan.insertId || (scanRow.edge_id ?? null) !== w.scan.edgeId) throw ERRORS.alreadyLinked(w.id);
-            again.push({ ...linkedItemOut({ cand, collection: w.collection, scan: w.scan }, cand.linked_junction_id, false), already_linked: true });
-            continue;
-          }
-          const same = mine && w.collection !== SURFACE_SCANS
-            && rowsOf(await trx.raw(SQL.junctionById[w.collection], [cand.linked_junction_id]))[0]?.record_id === w.recordId;
-          if (!same) throw ERRORS.alreadyLinked(w.id);
-          again.push({ candidate_id: w.id, collection: w.collection, record_id: w.recordId, junction_id: cand.linked_junction_id, adopted: !IMAGE_KINDS.includes(cand.kind), already_linked: true });
-          continue;
-        }
-        if (cand.state === 'gone') throw new HttpError(409, 'FILE_GONE', 'That file is no longer on the share.', { candidate_id: w.id });
-        throw new HttpError(409, 'NOT_NEW', 'Restore that file before linking it.', { candidate_id: w.id });
-      }
-      // The edit check, before anything is written: all or nothing.
-      // (a surface scan has no record-edit rule: Directus's own create permission on surface_scans decides, and the records it names are read as the caller)
-      const links = fresh.filter((e) => e.collection !== SURFACE_SCANS);
-      const editable = await editableSet(trx, acc, schema, links.map((e) => [e.collection, e.recordId]));
-      for (const e of links) if (!editable.has(`${e.collection}:${e.recordId}`)) throw ERRORS.notEditable(e.cand.candidate_id, e.collection, e.recordId);
-      const there = await existingLinks(trx, links.map((e) => ({ collection: e.collection, recordId: e.recordId, fileId: e.cand.directus_files_id })));
-      for (const e of links) if (there.has(linkKey(e.collection, e.recordId, e.cand.directus_files_id))) throw ERRORS.alreadyOnRecord(e.cand.candidate_id);
-      // a file that already has a surface scan (added through the Alicona dialog, or by someone else) is treated like an already-linked file: 409 up front,
-      // before any record is read or written (the unique constraints would also refuse the same insert or edge, but not another one)
-      await requireNoScan(trx, fresh);
-      await requireScanRefs(trx, { acc, schema, entries: fresh });
-      // nothing newly linked (the same person repeating a link): no batch, a count of 0, never the old batch id
-      const batchId = fresh.length ? newId() : null;
-      const linked = fresh.length ? await performLink(trx, { acc, schema, entries: fresh, linkKind, batchId }) : [];
-      return { link_batch_id: batchId, newly: linked.length, items: [...linked, ...again], wrote: fresh.length > 0 };
-    });
+    const out = await inTransaction(acc.user, (trx) => linkWithin(trx, { acc, schema, scope, wanted, linkKind }));
     if (out.wrote) await clearDataCache(schema);
     res.json({ data: shapeLink(out) });
   }));
@@ -1563,54 +1591,83 @@ export function mount(router, context, deps = {}) {
   router.post('/dismiss', stateChange('dismiss', { from: 'new', to: 'dismissed', refusal: { code: 'NOT_NEW', message: 'That file was already linked or is gone.' } }));
   router.post('/restore', stateChange('restore', { from: 'dismissed', to: 'new', refusal: { code: 'NOT_DISMISSED', message: 'That file was linked or is gone, so it cannot be restored.' } }));
 
+  // The body of an undo, inside the caller's transaction (the rules of POST /undo). `only` (a candidate id) undoes just that file of its batch, for a relink: the
+  // file stays linked (to its new record, in the same transaction), so its imaging settings stay, and the crawler has no folder to list again.
+  async function undoWithin(trx, { acc, schema, scope, batch, only = null }) {
+    const relinking = only !== null;
+    const rows = rowsOf(await trx.raw(SQL.batchForUpdate, [batch.toLowerCase()])).filter((r) => r.state === 'linked' && canSee(scope, r) && (!relinking || r.candidate_id === only));
+    if (!rows.length) throw new HttpError(404, 'NOT_FOUND', 'That batch does not exist or was already undone.');
+    const readOnly = rows.find((r) => !canChange(scope, r));
+    if (readOnly) throw ERRORS.adminReadOnly(readOnly.candidate_id);
+    if (rows.some((r) => !canUndoRow(scope, r, acc.user))) throw new HttpError(403, 'FORBIDDEN', 'Only the person who linked these files can undo it.');
+    for (const row of rows) {
+      // A surface scan this batch added: only that row, and only while it still holds the file it was made for, deleted as the caller (the member
+      // delete permission of surface_scans applies; never an administrator's). A caller who may not delete gets 403 and nothing is undone.
+      if (row.linked_collection === SURFACE_SCANS && row.linked_junction_id) {
+        if (!(await scanTableAvailable(trx))) continue;
+        const [scanRow] = rowsOf(await trx.raw(SQL.scanById, [row.linked_junction_id]));
+        if (!scanRow || scanRow.directus_files_id !== row.directus_files_id) continue;
+        try {
+          await itemsFor(schema, acc, SURFACE_SCANS, trx).deleteOne(row.linked_junction_id);
+        } catch (err) {
+          if (isDenied(err)) throw ERRORS.scanUndoDenied(row.candidate_id);
+          throw err;
+        }
+        continue;
+      }
+      // Only the junction row this batch created, and only if it is still there (someone may have removed it in Data Studio meanwhile).
+      if (!row.linked_junction_id || !isTarget(row.linked_collection)) continue;
+      const stillThere = rowsOf(await trx.raw(SQL.junctionById[row.linked_collection], [row.linked_junction_id]))[0];
+      // gone, or repointed at another file in Data Studio since: not this batch's row any more, leave it alone
+      if (!stillThere || stillThere.directus_files_id !== row.directus_files_id) continue;
+      try {
+        await itemsFor(schema, acc, LINK_TARGETS[row.linked_collection].junction, trx).deleteOne(row.linked_junction_id);
+      } catch (err) {
+        if (isDenied(err)) throw new HttpError(403, 'FORBIDDEN', 'You can no longer change that record, so this link cannot be undone.', { candidate_id: row.candidate_id });
+        throw err;
+      }
+    }
+    // the settings follow the file: removed once no row of the four link tables holds it any more (checked after the deletes above)
+    // (before migration 197 there is no table to delete from: an undo must still work then)
+    if (!relinking && await semTableAvailable(trx)) await trx.raw(SQL.deleteUnlinkedSemSettings, [[...new Set(rows.map((r) => r.directus_files_id))].join(',')]);
+    const done = rowsOf(await trx.raw(SQL.resetBatch, [rows.map((r) => r.candidate_id).join(','), batch.toLowerCase()]));
+    // the files are 'new' again: if one vanished while it was linked, the crawler must list its folder again to mark it gone (D12)
+    if (done.length && !relinking) await trx.raw(SQL.relistDirs, [done.map((r) => r.candidate_id).join(',')]);
+    return shapeUndo(batch, done);
+  }
+
   router.post('/undo', route(async ({ req, res, acc }) => {
     const batch = bodyOf(req)?.link_batch_id;
     if (!isUuid(batch)) throw badInput('link_batch_id must be a batch id.');
     const schema = await schemaOf(req);
     const scope = await scopeOf(acc);
-    const out = await inTransaction(acc.user, async (trx) => {
-      const rows = rowsOf(await trx.raw(SQL.batchForUpdate, [batch.toLowerCase()])).filter((r) => r.state === 'linked' && canSee(scope, r));
-      if (!rows.length) throw new HttpError(404, 'NOT_FOUND', 'That batch does not exist or was already undone.');
-      const readOnly = rows.find((r) => !canChange(scope, r));
-      if (readOnly) throw ERRORS.adminReadOnly(readOnly.candidate_id);
-      if (!scope.admin && rows.some((r) => r.decided_by !== acc.user)) throw new HttpError(403, 'FORBIDDEN', 'Only the person who linked these files can undo it.');
-      for (const row of rows) {
-        // A surface scan this batch added: only that row, and only while it still holds the file it was made for, deleted as the caller (the member
-        // delete permission of surface_scans applies; never an administrator's). A caller who may not delete gets 403 and nothing is undone.
-        if (row.linked_collection === SURFACE_SCANS && row.linked_junction_id) {
-          if (!(await scanTableAvailable(trx))) continue;
-          const [scanRow] = rowsOf(await trx.raw(SQL.scanById, [row.linked_junction_id]));
-          if (!scanRow || scanRow.directus_files_id !== row.directus_files_id) continue;
-          try {
-            await itemsFor(schema, acc, SURFACE_SCANS, trx).deleteOne(row.linked_junction_id);
-          } catch (err) {
-            if (isDenied(err)) throw ERRORS.scanUndoDenied(row.candidate_id);
-            throw err;
-          }
-          continue;
-        }
-        // Only the junction row this batch created, and only if it is still there (someone may have removed it in Data Studio meanwhile).
-        if (!row.linked_junction_id || !isTarget(row.linked_collection)) continue;
-        const stillThere = rowsOf(await trx.raw(SQL.junctionById[row.linked_collection], [row.linked_junction_id]))[0];
-        // gone, or repointed at another file in Data Studio since: not this batch's row any more, leave it alone
-        if (!stillThere || stillThere.directus_files_id !== row.directus_files_id) continue;
-        try {
-          await itemsFor(schema, acc, LINK_TARGETS[row.linked_collection].junction, trx).deleteOne(row.linked_junction_id);
-        } catch (err) {
-          if (isDenied(err)) throw new HttpError(403, 'FORBIDDEN', 'You can no longer change that record, so this link cannot be undone.', { candidate_id: row.candidate_id });
-          throw err;
-        }
-      }
-      // the settings follow the file: removed once no row of the four link tables holds it any more (checked after the deletes above)
-      // (before migration 197 there is no table to delete from: an undo must still work then)
-      if (await semTableAvailable(trx)) await trx.raw(SQL.deleteUnlinkedSemSettings, [[...new Set(rows.map((r) => r.directus_files_id))].join(',')]);
-      const done = rowsOf(await trx.raw(SQL.resetBatch, [rows.map((r) => r.candidate_id).join(','), batch.toLowerCase()]));
-      // the files are 'new' again: if one vanished while it was linked, the crawler must list its folder again to mark it gone (D12)
-      if (done.length) await trx.raw(SQL.relistDirs, [done.map((r) => r.candidate_id).join(',')]);
-      return shapeUndo(batch, done);
-    });
+    const out = await inTransaction(acc.user, (trx) => undoWithin(trx, { acc, schema, scope, batch }));
     await clearDataCache(schema);
     res.json({ data: out });
+  }));
+
+  // POST /relink: Change a LINKED file's record in ONE transaction: the file's own link is undone (only that file, whatever its batch) and the file is linked to the new
+  // record. Either both happen or neither: a refused new link (the record not editable, gone, or the file already on it) rolls the undo back, so the file stays on its
+  // old record and its imaging settings, manual corrections included, are never touched (they stay in a successful relink too: the file is linked all along).
+  router.post('/relink', route(async ({ req, res, acc }) => {
+    const body = bodyOf(req);
+    if (!isObject(body) || !isUuid(body.candidate_id) || !isUuid(body.record_id) || !isTarget(body.collection)) {
+      throw badInput('A relink needs a candidate_id, a collection (physical_samples, manufacturing_operations or test_sessions) and a record_id.');
+    }
+    const id = body.candidate_id.toLowerCase();
+    const schema = await schemaOf(req);
+    const scope = await scopeOf(acc);
+    const out = await inTransaction(acc.user, async (trx) => {
+      const [cand] = rowsOf(await trx.raw(SQL.candidatesForUpdate, [id]));
+      if (!cand || !canSee(scope, cand)) throw ERRORS.notInInbox(id);
+      if (!canChange(scope, cand)) throw ERRORS.adminReadOnly(id);
+      // only a file linked to a sample, operation or test has a record to change (a surface scan was ADDED, there is nothing to change it to)
+      if (cand.state !== 'linked' || !cand.link_batch_id || !isTarget(cand.linked_collection)) throw ERRORS.notLinked(id);
+      await undoWithin(trx, { acc, schema, scope, batch: cand.link_batch_id, only: id });
+      return linkWithin(trx, { acc, schema, scope, wanted: [{ id, collection: body.collection, recordId: body.record_id.toLowerCase() }], linkKind: 'manual' });
+    });
+    await clearDataCache(schema);
+    res.json({ data: shapeLink(out) });
   }));
 
   // -- reading ---------------------------------------------------------------------------------------------------------------
@@ -1718,7 +1775,7 @@ export function mount(router, context, deps = {}) {
     const open = f.tab === 'new' || f.tab === 'older' || f.tab === 'open';
     const acceptable = f.acceptable && open ? (await planAccept(database, { acc, schema, scope, f, lock: false })).entries.length : null;
     // `viewer` is who is asking, for the one thing a row names by folder: whose Inbox holds the original of a copy (duplicateOwnerOut)
-    res.json(shapeFiles(rows, { ...info, viewer: scope }, { total: count, limit: f.limit, offset: f.offset, acceptable }));
+    res.json(shapeFiles(rows, { ...info, viewer: scope, userId: acc.user }, { total: count, limit: f.limit, offset: f.offset, acceptable }));
   }));
 
   // GET /siblings?file=<candidate_id>&limit=: the other pictures linked to the same sample, operation or test as that file (header comment). The record comes from the
@@ -1731,7 +1788,7 @@ export function mount(router, context, deps = {}) {
     const scope = await scopeOf(acc);
     const [cand] = isUuid(file) ? rowsOf(await database.raw(SQL.candidatesById, [file.toLowerCase()])) : [];
     if (!cand || !canSee(scope, cand)) throw ERRORS.notInInbox(isUuid(file) ? file.toLowerCase() : undefined);
-    const none = () => res.json(shapeFiles([], { viewer: scope }, { total: 0, limit, offset: 0, acceptable: null }));
+    const none = () => res.json(shapeFiles([], { viewer: scope, userId: acc.user }, { total: 0, limit, offset: 0, acceptable: null }));
     if (cand.state !== 'linked' || !isTarget(cand.linked_collection) || !cand.linked_junction_id) return none();
     const [junction] = rowsOf(await database.raw(SQL.junctionById[cand.linked_collection], [cand.linked_junction_id]));
     // gone, or repointed at another file in Data Studio since: this file is not on that record any more
@@ -1747,7 +1804,7 @@ export function mount(router, context, deps = {}) {
     const total = buildListQuery(scope, f, { record, count: true });
     const rows = rowsOf(await database.raw(page.sql, page.bindings));
     const [{ total: count } = { total: 0 }] = rowsOf(await database.raw(total.sql, total.bindings));
-    res.json(shapeFiles(rows, { ...(await infoForRows(acc, schema, rows)), viewer: scope }, { total: count, limit, offset: 0, acceptable: null }));
+    res.json(shapeFiles(rows, { ...(await infoForRows(acc, schema, rows)), viewer: scope, userId: acc.user }, { total: count, limit, offset: 0, acceptable: null }));
   }));
 
   // -- the pictures -------------------------------------------------------------------------------------------------------------

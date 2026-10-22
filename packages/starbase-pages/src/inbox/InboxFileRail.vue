@@ -65,8 +65,8 @@ const facts = computed<Fact[]>(() => [
 		</template>
 		<template v-if="file.state === 'linked'" #extra>
 			<div id="linked" class="linked" data-test="rail-linked">
-				<LinkCard :file="file" :busy="busy || undoing" @open="emit('open-record', $event)" @change="emit('change')" @undo="emit('undo')" />
-				<LinkedSiblings :file="file" :rows="siblings" :total="siblingsTotal" @open="emit('open-sibling', $event)" @compare="emit('compare-sibling', $event)" />
+				<LinkCard :key="file.candidate_id" :file="file" :busy="busy || undoing" @open="emit('open-record', $event)" @change="emit('change')" @undo="emit('undo')" />
+				<LinkedSiblings :key="file.candidate_id" :file="file" :rows="siblings" :total="siblingsTotal" @open="emit('open-sibling', $event)" @compare="emit('compare-sibling', $event)" />
 			</div>
 		</template>
 		<template #after-facts>

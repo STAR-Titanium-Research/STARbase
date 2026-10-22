@@ -52,6 +52,7 @@
         "linked_title": null,
         "link_batch_size": null,
         "decided_by_name": null,
+        "can_undo": false,
         "owner": {
           "kind": "team",
           "id": "00000000-0000-4000-8000-000000000021",
@@ -100,6 +101,7 @@
         "linked_title": null,
         "link_batch_size": null,
         "decided_by_name": null,
+        "can_undo": false,
         "owner": {
           "kind": "team",
           "id": "00000000-0000-4000-8000-000000000021",

@@ -44,6 +44,7 @@ test('the fixtures are the cases the client has to handle', () => {
     'ignored_get', 'ignored_get_viewer', 'ignored_get_empty', 'ignored_get_empty_viewer', 'ignored_post_ok', 'ignored_post_ok_team', 'ignored_post_400_folder', 'ignored_post_400_root',
     'ignored_post_403_team', 'ignored_post_409_no_folder', 'ignored_post_409_already_ignored', 'ignored_post_409_too_many_rules', 'ignored_delete_ok',
     'ignored_delete_ok_rate_limited', 'ignored_delete_ok_still_ignored', 'ignored_delete_404', 'siblings', 'siblings_none', 'siblings_404',
+    'relink_ok', 'relink_403_not_editable', 'relink_409_not_linked',
   ]) assert.ok(names.has(`${wanted}.json`), `missing fixture ${wanted}`);
   const rows = built.get('files_new.json').body.data;
   assert.ok(rows.some((r) => r.kind === 'sem_image' && r.suggested_label), 'a new original with a suggestion');
@@ -102,6 +103,11 @@ test('every request in a fixture is one the server accepts', () => {
           assert.match(i.record_id, UUID, label);
         }
       }
+    } else if (req.path === '/d1-inbox/relink') {
+      assert.deepEqual(Object.keys(body).sort(), ['candidate_id', 'collection', 'record_id'], label);
+      assert.match(body.candidate_id, UUID, label);
+      assert.match(body.record_id, UUID, label);
+      assert.ok(LINK_COLLECTIONS.includes(body.collection) && body.collection !== 'surface_scans', label);
     } else if (req.path === '/d1-inbox/accept-all') {
       const parsed = parseFileFilters(body.filter, { defaultTab: 'open' });
       assert.deepEqual(Object.keys(body.filter).filter((k) => !FILTER_KEYS.includes(k)), [], `${label} sends a filter key the server ignores`);

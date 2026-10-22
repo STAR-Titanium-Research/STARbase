@@ -49,6 +49,7 @@
         "linked_title": "Ti-6Al-4V fatigue bar",
         "link_batch_size": 1,
         "decided_by_name": "Alice A",
+        "can_undo": true,
         "owner": {
           "kind": "person",
           "id": "00000000-0000-4000-8000-000000000011",
@@ -95,6 +96,7 @@
         "linked_title": "Ti-6Al-4V fatigue bar",
         "link_batch_size": 1,
         "decided_by_name": "Alice A",
+        "can_undo": true,
         "owner": {
           "kind": "person",
           "id": "00000000-0000-4000-8000-000000000011",

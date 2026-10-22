@@ -1,7 +1,7 @@
 import { computed, ref } from 'vue';
 import { useRequestGate, type HostApi } from '@d1/ui';
 import {
-	InboxApiError, acceptAll, dismissFiles, linkFiles, loadFiles, rescan, restoreFiles, undoBatch,
+	InboxApiError, acceptAll, dismissFiles, linkFiles, loadFiles, relinkFile, rescan, restoreFiles, undoBatch,
 	type FilesQuery, type FoundFile, type LinkItem, type Skipped,
 } from './inboxApi';
 import {
@@ -9,7 +9,6 @@ import {
 	type AcceptPair,
 } from './inboxBulk';
 import { listPlan, nameOf, suggestionOf, type InboxFilters } from './inboxModel';
-import { CHANGE_HALF_DONE } from './linkedModel';
 import { SCAN_ALREADY_TEXT, SCAN_NOT_LINKED, scanAddedText, scanErrorText, scanLinkItem, type ScanAddForm } from './inboxScan';
 
 // The confirm of Accept all: what the dry run said (the count, the files and where they go, what it would leave), and whether it is still asking.
@@ -48,11 +47,8 @@ export interface Notice {
 	removeRule?: string;
 }
 
-/**
- * A refusal may name the form control it is about (a 400 from adding a surface scan): `field`. `undone` is a Change whose old link was removed before the new one was
- * refused: the file is back in the Inbox, unlinked, so the page must not go on showing it as linked.
- */
-export type Outcome = { ok: true } | { ok: false; message: string; field?: string; undone?: true };
+/** A refusal may name the form control it is about (a 400 from adding a surface scan): `field`. */
+export type Outcome = { ok: true } | { ok: false; message: string; field?: string };
 
 export interface InboxDeps {
 	api: HostApi;
@@ -404,23 +400,26 @@ export function createInbox(deps: InboxDeps) {
 	}
 
 	/**
-	 * Change the record a LINKED file is on. The endpoint links only a file that is new, so this undoes the file's link batch and then links the file again (the
-	 * page offers it only for a batch of one: an undo takes the whole batch). If the undo works and the new link is refused, the file is back in the Inbox, unlinked,
-	 * and the notice says so. Imaging corrections the person made by hand go with the undo.
+	 * Change the record a LINKED file is on: ONE request (POST /relink), which undoes that file's link and links it to the new record in a single transaction, so a
+	 * refusal (a record the person may not edit, one that is gone, a link that is not theirs to undo) changes nothing: the file stays where it was, with its
+	 * imaging corrections. The page offers it only for a batch of one. Choosing the record the file is already on does nothing.
 	 */
 	async function relink(file: FoundFile, collection: string, recordId: string): Promise<Outcome> {
 		if (!file.link_batch_id) return { ok: false, message: 'This file has no link to change.' };
-		const undone = await undo({ kind: 'batch', id: file.link_batch_id });
-		if (!undone.ok) return undone;
-		const made = await link(file, collection, recordId);
-		if (made.ok) {
-			// the file is on its new record: the Recently linked list names it there
-			await load();
-			return made;
-		}
-		const text = `${CHANGE_HALF_DONE}: ${made.message}`;
-		say({ tone: 'bad', text });
-		return { ok: false, message: text, undone: true };
+		if (file.linked_collection === collection && file.linked_record_id === recordId) return { ok: true };
+		return run([file.candidate_id], async () => {
+			try {
+				const r = await relinkFile(api, { candidate_id: file.candidate_id, collection, record_id: recordId });
+				say({ tone: 'ok', text: linkResultText(r.linked), undo: r.link_batch_id ? { kind: 'batch', id: r.link_batch_id } : undefined });
+				// the file is on its new record: the Recently linked list names it there
+				await load();
+				deps.onChanged?.();
+				return { ok: true } as const;
+			} catch (e) {
+				const race = teamRaceText(file, e);
+				return failed(e, 'Could not change the link.', race ? { message: race, field: null } : undefined);
+			}
+		});
 	}
 
 	async function rescanNow(): Promise<Outcome> {

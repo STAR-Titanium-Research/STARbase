@@ -22,6 +22,9 @@
 //                                       `acceptable`) and the files it would link (`ids`, or `items`); candidate_ids links exactly those
 //   POST /d1-inbox/dismiss | /restore   { candidate_ids } -> { data: { changed, changed_ids, unchanged_ids } }
 //   POST /d1-inbox/undo                 { link_batch_id } -> { data: { link_batch_id, undone } }
+//   POST /d1-inbox/relink               { candidate_id, collection, record_id } -> the answer of /link (a new batch of one): Change a LINKED file's record, atomically: its own
+//                                       link is undone and the new one made in one transaction, so a refusal (403 FORBIDDEN not editable, 404, 409 ALREADY_ON_RECORD / NOT_LINKED)
+//                                       changes nothing
 //   POST /d1-inbox/rescan               202 { data: { queued: true } }; 429 (extensions.retry_after_seconds) within 10 minutes or while a scan is
 //                                       queued or running; 409 NO_FOLDER when the person has no folder
 //   GET  /d1-inbox/prefs, PUT /d1-inbox/prefs { auto_link } -> { data: { auto_link } }
@@ -149,6 +152,7 @@ export function parseFile(v: unknown): FoundFile | null {
 		has_thumbnail: r.has_thumbnail === true,
 	};
 	if (typeof r.suggested_can_edit === 'boolean') file.suggested_can_edit = r.suggested_can_edit;
+	if (typeof r.can_undo === 'boolean') file.can_undo = r.can_undo;
 	if (str(r.name)) file.name = str(r.name) as string;
 	if (typeof r.mime_type === 'string' || r.mime_type === null) file.mime_type = r.mime_type;
 	if (typeof r.adopted === 'boolean') file.adopted = r.adopted;
@@ -280,6 +284,16 @@ export const dismissFiles = (api: HostApi, candidateIds: string[]): Promise<numb
 
 export const restoreFiles = (api: HostApi, candidateIds: string[]): Promise<number> =>
 	call(() => api.post(`${BASE}/restore`, { candidate_ids: candidateIds }), (b) => num(b.changed) ?? candidateIds.length);
+
+/** Change the record a LINKED file is on, in one request: the server undoes that file's link and links it to `recordId` in one transaction (a refusal changes nothing). */
+export const relinkFile = (api: HostApi, item: LinkItem): Promise<LinkResult> =>
+	call(
+		() => api.post(`${BASE}/relink`, item),
+		(b) => {
+			const done = linkedItems(b.items);
+			return { link_batch_id: String(b.link_batch_id ?? ''), linked: linkedCount(b, done), items: done };
+		},
+	);
 
 export const undoBatch = (api: HostApi, linkBatchId: string): Promise<number> =>
 	call(() => api.post(`${BASE}/undo`, { link_batch_id: linkBatchId }), (b) => num(b.undone) ?? 0);

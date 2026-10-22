@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { recordRoute } from '@d1/ui';
 import { foundFile } from './fakeInboxServer';
 import type { FoundFile } from './inboxApi';
-import { CHANGE_HALF_DONE, SIBLINGS_SHOWN, changeBlocked, hasSiblings, linkCardView, siblingsView, undoConfirmText } from './linkedModel';
+import { SIBLINGS_SHOWN, changeBlocked, hasSiblings, linkCardView, siblingsView, undoConfirmText } from './linkedModel';
 
 const REC = '00000000-0000-4000-8000-000000000101';
 const linked = (over: Partial<FoundFile> = {}): FoundFile =>
@@ -63,8 +63,10 @@ describe('Change and Undo: a batch is undone whole', () => {
 		expect(linkCardView(linked({ link_batch_size: undefined }))!.batch).toBe(1);
 	});
 
-	it('has words for a change whose new link was refused', () => {
-		expect(CHANGE_HALF_DONE).toMatch(/old link was removed/);
+	it('the server says whether the caller may undo or change the link (can_undo); an older server says nothing and the buttons are offered', () => {
+		expect(linkCardView(linked({ can_undo: false }))!.canUndo).toBe(false);
+		expect(linkCardView(linked({ can_undo: true }))!.canUndo).toBe(true);
+		expect(linkCardView(linked({ can_undo: undefined }))!.canUndo).toBe(true);
 	});
 });
 

@@ -24,8 +24,10 @@ export interface LinkCardView {
 	openLabel: string;
 	/** A surface scan was ADDED, not linked: there is no other record to change it to, and no siblings. */
 	scan: boolean;
-	/** How many files Undo would put back (the link batch). 1 when the server does not say. */
+	/** How many files Undo would put back (the link batch, the ones the caller can see). 1 when the server does not say. */
 	batch: number;
+	/** Would an Undo or a Change work for the caller: the server says (can_undo), an older one says nothing and then the buttons are offered and the server decides. */
+	canUndo: boolean;
 }
 
 /** The record's own noun: "sample", "operation", "test", "insert" or "edge"; "record" when the page does not know the collection. */
@@ -54,10 +56,11 @@ export function linkCardView(file: FoundFile): LinkCardView | null {
 		openLabel: `Open ${noun}`,
 		scan,
 		batch: Math.max(1, file.link_batch_size ?? 1),
+		canUndo: file.can_undo !== false,
 	};
 }
 
-/** Why Change… is not offered, or null when it is: it is an undo followed by a new link, and an undo takes the whole batch with it. */
+/** Why Change… is not offered, or null when it is: it moves one file, and the page offers it only for a link batch of one (an Undo takes the whole batch). */
 export function changeBlocked(view: LinkCardView): string | null {
 	if (view.scan) return 'A surface scan was added to an insert or an edge, not linked to a record. Undo it to add it again.';
 	return view.batch > 1 ? `This file was linked together with ${view.batch - 1} other${view.batch === 2 ? '' : 's'}. Undo that link first to link this one elsewhere.` : null;
@@ -68,9 +71,6 @@ export function undoConfirmText(view: LinkCardView): string {
 	if (view.batch > 1) return `This undoes the link of all ${view.batch} files linked together. They go back to your Inbox.`;
 	return 'The file goes back to your Inbox.';
 }
-
-/** The refusal text when Change undid the old link but the new one was refused. */
-export const CHANGE_HALF_DONE = 'The old link was removed, but the new one could not be made';
 
 export interface SiblingsView {
 	/** The pictures the strip draws (the first SIBLINGS_SHOWN). */

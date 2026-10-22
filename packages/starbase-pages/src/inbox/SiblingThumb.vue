@@ -28,7 +28,7 @@ const label = computed(() => `${props.picking ? 'Compare with' : 'Open'} ${sibli
 <style scoped>
 .tile {
 	flex: none; display: grid; place-items: center; box-sizing: border-box; width: 44px; height: 34px; padding: 0; overflow: hidden; cursor: pointer; font: inherit;
-	border: 1px solid var(--d1-line); border-radius: 6px; background: var(--d1-surface, var(--theme--background)); color: var(--d1-dim);
+	border: 1px solid var(--d1-line); border-radius: 8px; background: var(--d1-surface, var(--theme--background)); color: var(--d1-dim);
 }
 .tile img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .tile:hover, .tile.picking { border-color: var(--d1-accent, var(--theme--primary)); }

@@ -47,7 +47,7 @@ function stopPicking(e: KeyboardEvent): void {
 		</p>
 		<ul class="strip" role="list">
 			<li v-for="s in view.shown" :key="s.candidate_id"><SiblingThumb :file="s" :picking="picking" @pick="pick" /></li>
-			<li v-if="view.more > 0" class="more" :aria-label="`and ${view.more} more`" data-test="siblings-more">+{{ view.more }}</li>
+			<li v-if="view.more > 0" class="more" data-test="siblings-more"><span role="img" :aria-label="`and ${view.more} more`">+{{ view.more }}</span></li>
 		</ul>
 		<div class="row">
 			<button type="button" class="d1-btn" :aria-pressed="picking" data-test="siblings-compare" @click="picking = !picking">Compare with…</button>

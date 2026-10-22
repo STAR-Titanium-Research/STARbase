@@ -278,7 +278,8 @@ record, decided by the same function `d1-access-guard` uses. A view-only user is
 |---|---|---|
 | `GET /d1-inbox/summary` | login | counts: new, older with an exact match, for the person and each of their teams |
 | `GET /d1-inbox/files` | login | paged list, filters: tab (new/older/linked/dismissed), kind, folder, date, owner or team, match strength |
-| `GET /d1-inbox/siblings?file=<candidate_id>&limit=` | login | the other pictures (SEM images, images) linked to the same sample, operation or test as that file, newest link first, with the list's own visibility; a linked row of the list also carries `linked_title` and `link_batch_size` (the Link card and the sibling strip, viewer spec) |
+| `GET /d1-inbox/siblings?file=<candidate_id>&limit=` | login | the other pictures (SEM images, images) linked to the same sample, operation or test as that file, newest link first, with the list's own visibility; a linked row of the list also carries `linked_title`, `link_batch_size` (the files of the batch the caller can see) and `can_undo` (the Link card and the sibling strip, viewer spec) |
+| `POST /d1-inbox/relink` `{ candidate_id, collection, record_id }` | login (linker) | Change a linked file's record atomically: that file's link is undone and the new one made in one transaction; a refused new link changes nothing; answers like `/link` (a new batch of one); 409 `NOT_LINKED` for a file not linked to a sample, operation or test |
 | `POST /d1-inbox/link` | login | `{items:[{candidate_id, collection, record_id}]}` in one transaction; returns `link_batch_id`. A surface scan is `{candidate_id, collection:'surface_scans', insert_id\|edge_id, condition, ...}` (§8) |
 | `POST /d1-inbox/accept-all` | login | `{filter}` → links only rows with exact short-ID suggestion the caller can edit; returns the batch |
 | `POST /d1-inbox/dismiss`, `/restore` | login | state changes |

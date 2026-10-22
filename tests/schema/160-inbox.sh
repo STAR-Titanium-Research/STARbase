@@ -726,7 +726,7 @@ SELECT 'ib_summary_new:' || coalesce(sum(n) FILTER (WHERE origin = 'new'), 0) FR
 SELECT 'ib_summary_older_exact:' || coalesce(sum(n) FILTER (WHERE origin = 'backlog' AND exact), 0) FROM ib_sm;
 CREATE TEMP TABLE ib_cnt AS EXECUTE count_new('$IB_P', '');
 SELECT 'ib_list_new_total:' || total FROM ib_cnt;
-CREATE TEMP TABLE ib_ls AS EXECUTE list_new('$IB_P', '', 50, 0);
+CREATE TEMP TABLE ib_ls AS EXECUTE list_new('f', '$IB_P', '', '$IB_P', '', 50, 0);
 SELECT 'ib_list_copies:' || coalesce(string_agg(regexp_replace(rel_path, '^.*/', '') || '=' || CASE WHEN duplicate_owner_person_id = '$IB_P' THEN 'me' WHEN duplicate_owner_person_id = '$IB_Q' THEN 'q' ELSE '-' END, ',' ORDER BY rel_path), '') FROM ib_ls WHERE duplicate_of IS NOT NULL;
 CREATE TEMP TABLE ib_acc AS EXECUTE accept_open('$IB_P', '');
 SELECT 'ib_accept:' || coalesce(string_agg(c.rel_path, ',' ORDER BY c.rel_path), '') FROM d1_private.file_candidates c WHERE c.candidate_id IN (SELECT candidate_id FROM ib_acc);
@@ -796,9 +796,9 @@ CREATE TEMP TABLE ib_sm_scans AS EXECUTE summarywithscans('$IB_P', '');
 SELECT 'ib_scan_summary_excl:' || coalesce(sum(n) FILTER (WHERE origin = 'new'), 0) FROM ib_sm_scans;
 CREATE TEMP TABLE ib_cnt_scans AS EXECUTE count_new_scans('$IB_P', '');
 SELECT 'ib_scan_count_excl:' || total FROM ib_cnt_scans;
-CREATE TEMP TABLE ib_ls_scans AS EXECUTE list_new_scans('$IB_P', '', 50, 0);
+CREATE TEMP TABLE ib_ls_scans AS EXECUTE list_new_scans('f', '$IB_P', '', '$IB_P', '', 50, 0);
 SELECT 'ib_scan_list_excl:' || (count(*) FILTER (WHERE rel_path = 'Users/ibx1/g.tif') || ':' || count(*) FILTER (WHERE rel_path = 'Users/ibx1/h.tif')) FROM ib_ls_scans;
-CREATE TEMP TABLE ib_ls_old AS EXECUTE list_new('$IB_P', '', 50, 0);
+CREATE TEMP TABLE ib_ls_old AS EXECUTE list_new('f', '$IB_P', '', '$IB_P', '', 50, 0);
 SELECT 'ib_scan_list_plain:' || count(*) FILTER (WHERE rel_path = 'Users/ibx1/g.tif') FROM ib_ls_old;
 CREATE TEMP TABLE ib_open_scans AS EXECUTE count_open_scans('$IB_P', '');
 CREATE TEMP TABLE ib_open_plain AS EXECUTE count_open('$IB_P', '');
@@ -808,9 +808,9 @@ SELECT 'ib_scans_of_files:' || count(*) || ':' || coalesce(max(directus_files_id
 SELECT candidate_id AS ib_g FROM d1_private.file_candidates WHERE rel_path = 'Users/ibx1/g.tif' \gset
 SELECT pg_temp.ib_run(format('EXECUTE marklinked(%L, %L, %L, %L, %L, false, %L)', '$IB_U', 'auto', 'surface_scans', 'a1b00000-0000-4000-8000-000000000006', gen_random_uuid(), :'ib_g')) AS ib_n6 \gset
 SELECT 'ib_scan_linked:' || :ib_n6 || ':' || state || ':' || linked_collection FROM d1_private.file_candidates WHERE candidate_id = :'ib_g';
-CREATE TEMP TABLE ib_ll AS EXECUTE list_linked('$IB_P', 'auto', 50, 0);
+CREATE TEMP TABLE ib_ll AS EXECUTE list_linked('f', '$IB_P', '', '$IB_P', 'auto', 50, 0);
 SELECT 'ib_scan_list:' || coalesce(string_agg(linked_record_id::text, ','), '') FROM ib_ll WHERE linked_collection = 'surface_scans';
-CREATE TEMP TABLE ib_ll_scans AS EXECUTE list_linked_scans('$IB_P', 'auto', 50, 0);
+CREATE TEMP TABLE ib_ll_scans AS EXECUTE list_linked_scans('f', '$IB_P', '', '$IB_P', 'auto', 50, 0);
 SELECT 'ib_scan_list_linked_kept:' || coalesce(string_agg(linked_record_id::text, ','), '') FROM ib_ll_scans WHERE linked_collection = 'surface_scans';
 -- stream D (ADR-0022): the imaging settings the link saves through d1_private.save_sem_settings and the undo removes. File ...0101 is saved; ...0103 has a
 -- sample junction row, ...0107 a surface scan row and ...0105 no link: after the undo's delete only ...0105's settings are gone.
@@ -922,9 +922,9 @@ SELECT ('a1b00000-0000-4000-8000-0000000002' || lpad(n::text, 2, '0'))::uuid, CA
   FROM (VALUES (8, 'new', 'Users/ibx1/Ign Dir/late.tif'), (9, 'new', 'users/IBX1/ign dir/sub/late2.tif'), (10, 'linked', 'Users/ibx1/Ign Dir/linked.tif'),
                (11, 'new', 'Users/ibx1/Ign Dir 2/ok.tif'), (12, 'new', 'Shared/Ibx Team/Old/late.tif'), (13, 'new', 'Shared/Ibx Team/Older/ok.tif'),
                (14, 'new', 'Users/ibx1/deep/down/x.tif'), (15, 'new', 'Users/ibx1/Deep/other.tif'), (16, 'new', 'Users/ibx1/Deep/Down2/y.tif')) v(n, st, path);
-CREATE TEMP TABLE ib_m1_ls AS EXECUTE list_new('$IB_P', 'a1b00000-0000-4000-8000-0000000000c1', 200, 0);
+CREATE TEMP TABLE ib_m1_ls AS EXECUTE list_new('f', '$IB_P', '', '$IB_P', 'a1b00000-0000-4000-8000-0000000000c1', 200, 0);
 SELECT 'ib_ign_late_listed:' || coalesce(string_agg(rel_path, ',' ORDER BY rel_path COLLATE "C") FILTER (WHERE directus_files_id::text ~ '^a1b00000-0000-4000-8000-0000000002(08|09|10|11|12|13|14|15|16)$'), '') FROM ib_m1_ls;
-CREATE TEMP TABLE ib_m1_ls_scans AS EXECUTE list_new_scans('$IB_P', 'a1b00000-0000-4000-8000-0000000000c1', 200, 0);
+CREATE TEMP TABLE ib_m1_ls_scans AS EXECUTE list_new_scans('f', '$IB_P', '', '$IB_P', 'a1b00000-0000-4000-8000-0000000000c1', 200, 0);
 SELECT 'ib_ign_late_listed_scans:' || coalesce(string_agg(rel_path, ',' ORDER BY rel_path COLLATE "C") FILTER (WHERE directus_files_id::text ~ '^a1b00000-0000-4000-8000-0000000002(08|09|10|11|12|13|14|15|16)$'), '') FROM ib_m1_ls_scans;
 CREATE TEMP TABLE ib_m1_cnt AS EXECUTE count_new('$IB_P', 'a1b00000-0000-4000-8000-0000000000c1');
 SELECT 'ib_ign_late_count:' || ((SELECT total FROM ib_m1_cnt) - (SELECT total FROM ib_m1_cnt0));
@@ -943,7 +943,7 @@ CREATE TEMP TABLE ib_m1_byid AS EXECUTE acceptcandidatesbyid(:'ib_m1_ids');
 SELECT 'ib_ign_late_accept_read:' || coalesce(string_agg(c.rel_path, ',' ORDER BY c.rel_path COLLATE "C"), '') FROM d1_private.file_candidates c WHERE c.candidate_id IN (SELECT candidate_id FROM ib_m1_byid);
 CREATE TEMP TABLE ib_m1_lock AS EXECUTE acceptcandidatesforupdate(:'ib_m1_ids');
 SELECT 'ib_ign_late_accept_lock:' || ((SELECT count(*) FROM ib_m1_lock) = (SELECT count(*) FROM ib_m1_byid));
-CREATE TEMP TABLE ib_m1_lk AS EXECUTE list_linked('$IB_P', 'manual', 200, 0);
+CREATE TEMP TABLE ib_m1_lk AS EXECUTE list_linked('f', '$IB_P', '', '$IB_P', 'manual', 200, 0);
 SELECT 'ib_ign_linked_listed:' || coalesce(string_agg(rel_path, ',' ORDER BY rel_path COLLATE "C") FILTER (WHERE rel_path ~ 'linked[.]tif$'), '') FROM ib_m1_lk;
 DELETE FROM d1_private.inbox_ignored_dirs WHERE owner_team_id IS NOT NULL OR owner_person_id = '$IB_Q' OR rel_folder = 'Deep/Down';
 -- removing the rule: the folder's cache rows are RESET (kept, mtime and listed time NULL; any case, below it, this owner only)
@@ -956,19 +956,29 @@ SELECT 'ib_ign_reset_wrong_owner_kept:' || (dir_mtime IS NOT NULL AND last_liste
 SELECT 'ib_ign_deleted:' || pg_temp.ib_run(format('EXECUTE ignoreddelete(%L)', :'ib_ign_id'));
 SELECT 'ib_ign_rules_left:' || count(*) FROM d1_private.inbox_ignored_dirs;
 -- GET /siblings: the other pictures linked to the same sample through the junction rows the links made (not another person's, not the file itself), with the size of the link batch
-INSERT INTO directus_files (id, filename_download) SELECT ('a1b00000-0000-4000-8000-0000000003' || lpad(g::text, 2, '0'))::uuid, 'sib' || g || '.tif' FROM generate_series(1, 3) g;
-SELECT gen_random_uuid() AS ib_sj1, gen_random_uuid() AS ib_sj2, gen_random_uuid() AS ib_sj3 \gset
+INSERT INTO directus_files (id, filename_download) SELECT ('a1b00000-0000-4000-8000-0000000003' || lpad(g::text, 2, '0'))::uuid, 'sib' || g || '.tif' FROM generate_series(1, 4) g;
+SELECT gen_random_uuid() AS ib_sj1, gen_random_uuid() AS ib_sj2, gen_random_uuid() AS ib_sj3, gen_random_uuid() AS ib_sj4 \gset
 INSERT INTO sample_data_files (id, sample_id, directus_files_id) VALUES
-  (:'ib_sj1', '$IB_S', 'a1b00000-0000-4000-8000-000000000301'), (:'ib_sj2', '$IB_S', 'a1b00000-0000-4000-8000-000000000302'), (:'ib_sj3', '$IB_S', 'a1b00000-0000-4000-8000-000000000303');
+  (:'ib_sj1', '$IB_S', 'a1b00000-0000-4000-8000-000000000301'), (:'ib_sj2', '$IB_S', 'a1b00000-0000-4000-8000-000000000302'), (:'ib_sj3', '$IB_S', 'a1b00000-0000-4000-8000-000000000303'),
+  (:'ib_sj4', '$IB_S', 'a1b00000-0000-4000-8000-000000000304');
 INSERT INTO d1_private.file_candidates (directus_files_id, owner_person_id, kind, origin, state, match_strength, matches, rel_path, link_kind, linked_collection, linked_junction_id, link_batch_id, decided_at) VALUES
   ('a1b00000-0000-4000-8000-000000000301', '$IB_P', 'sem_image', 'new', 'linked', 'none', '[]'::jsonb, 'Users/ibx1/s1.tif', 'manual', 'physical_samples', :'ib_sj1', gen_random_uuid(), now() - interval '3 hours'),
   ('a1b00000-0000-4000-8000-000000000302', '$IB_P', 'image', 'new', 'linked', 'none', '[]'::jsonb, 'Users/ibx1/s2.tif', 'manual', 'physical_samples', :'ib_sj2', gen_random_uuid(), now() - interval '2 hours'),
   ('a1b00000-0000-4000-8000-000000000303', '$IB_Q', 'sem_image', 'new', 'linked', 'none', '[]'::jsonb, 'Users/ibx1/s3.tif', 'manual', 'physical_samples', :'ib_sj3', gen_random_uuid(), now());
+-- another person's file in the batch of s1 (a bulk link of a file of theirs): not the caller's to count
+INSERT INTO d1_private.file_candidates (directus_files_id, owner_person_id, kind, origin, state, match_strength, matches, rel_path, link_kind, linked_collection, linked_junction_id, link_batch_id, decided_at, decided_by)
+  SELECT 'a1b00000-0000-4000-8000-000000000304', '$IB_Q', 'sem_image', 'new', 'linked', 'none', '[]'::jsonb, 'Users/ibx1/s4.tif', 'bulk', 'physical_samples', :'ib_sj4', link_batch_id, now() - interval '3 hours', '$IB_U'
+    FROM d1_private.file_candidates WHERE directus_files_id = 'a1b00000-0000-4000-8000-000000000301';
 SELECT candidate_id AS ib_sib_self FROM d1_private.file_candidates WHERE directus_files_id = 'a1b00000-0000-4000-8000-000000000301' \gset
-CREATE TEMP TABLE ib_sib AS EXECUTE siblings_list_physical_samples('$IB_P', '', 'sem_image,image', 'physical_samples', '$IB_S', :'ib_sib_self', 7, 0);
+CREATE TEMP TABLE ib_sib AS EXECUTE siblings_list_physical_samples('f', '$IB_P', '', '$IB_P', '', 'sem_image,image', 'physical_samples', '$IB_S', '$IB_S', :'ib_sib_self', 7, 0);
 SELECT 'ib_sib_list:' || coalesce(string_agg(rel_path || ':' || link_batch_size, ',' ORDER BY decided_at DESC), '') FROM ib_sib;
-CREATE TEMP TABLE ib_sib_cnt AS EXECUTE siblings_count_physical_samples('$IB_P', '', 'sem_image,image', 'physical_samples', '$IB_S', :'ib_sib_self');
+CREATE TEMP TABLE ib_sib_cnt AS EXECUTE siblings_count_physical_samples('$IB_P', '', 'sem_image,image', 'physical_samples', '$IB_S', '$IB_S', :'ib_sib_self');
 SELECT 'ib_sib_count:' || total FROM ib_sib_cnt;
+-- the batch size of s1 as Alice's list reads it: the 1 file she can see (not the 2 in the batch); an administrator's list counts both; who linked it comes with the row
+CREATE TEMP TABLE ib_bs_p AS EXECUTE list_linked('f', '$IB_P', '', '$IB_P', 'manual', 200, 0);
+SELECT 'ib_batch_person:' || link_batch_size FROM ib_bs_p WHERE rel_path = 'Users/ibx1/s1.tif';
+CREATE TEMP TABLE ib_bs_a AS EXECUTE list_linked('t', '$IB_P', '', '$IB_P', 'manual', 200, 0);
+SELECT 'ib_batch_admin:' || link_batch_size FROM ib_bs_a WHERE rel_path = 'Users/ibx1/s1.tif';
 ROLLBACK;
 SQL
 )
@@ -1012,6 +1022,8 @@ SQL
     expect_fixed ib_out "ib_sem_log_row:1:admin_read" "stream D: an administrator's read inserts one access log row with the reason admin_read"
     expect_fixed ib_out "ib_sib_list:Users/ibx1/s2.tif:1" "siblings: the other pictures linked to the same sample, found through the junction row of each link, are this person's own, not the file itself and not another person's; each says the size of its link batch"
     expect_fixed ib_out "ib_sib_count:1" "siblings: the count query answers the same set"
+    expect_fixed ib_out "ib_batch_person:1" "the batch size of a row counts only the batch files the caller can see: the other person's file in the batch is not counted"
+    expect_fixed ib_out "ib_batch_admin:2" "an administrator's list counts the whole batch (an undo by one takes both)"
     expect_fixed ib_out "ib_prefs:1" "the auto-link preference upserts"
     expect_fixed ib_out "ib_first_rescan:1" "a rescan request is queued"
     expect_fixed ib_out "ib_second_rescan:refused" "a second queued rescan for one person is refused by the unique index (the endpoint answers 429)"

@@ -114,15 +114,14 @@ async function choose(rec: { collection: string; id: string }) {
 	if (!f || dialogBusy.value) return;
 	dialogBusy.value = true;
 	dialogError.value = '';
-	// a file that is already linked is changed to another record (undo, then link); any other is linked
+	// a file that is already linked is changed to another record (one request: a refusal leaves it where it was); any other is linked
 	const r = await keepPlace(f, () => (f.state === 'linked' ? inbox.relink(f, rec.collection, rec.id) : inbox.link(f, rec.collection, rec.id)));
 	dialogBusy.value = false;
 	if (r.ok) {
 		dialogOpen.value = false;
-		// the changed file is on its new record: the sheet stays on it (the undo had handed the selection to its neighbour)
+		// the changed file is on its new record: the sheet stays on it
 		if (f.state === 'linked') selectedId.value = f.candidate_id;
-	} else if (r.undone) dialogOpen.value = false; // the old link is gone and the new one was refused (the notice says so): the file is back in the Inbox
-	else dialogError.value = r.message;
+	} else dialogError.value = r.message;
 }
 
 // ---- the Add a surface scan dialog (a surface scan is ADDED to an insert or an edge, never linked) ----

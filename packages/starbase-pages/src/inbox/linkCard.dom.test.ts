@@ -162,6 +162,25 @@ describe('LinkCard', () => {
 		await nextTick();
 		expect(q('[data-test="link-confirm"]')).toBeNull();
 	});
+
+	it('offers Open only, no Undo and no Change, when the server says the caller may not undo this link (can_undo false)', () => {
+		mount(LinkCard, { file: linked({ can_undo: false, link_batch_size: 3 }), busy: false });
+		expect(q('[data-test="link-open"]')).not.toBeNull();
+		expect(q('[data-test="link-undo"]')).toBeNull();
+		expect(q('[data-test="link-change"]')).toBeNull();
+		expect(q('[data-test="link-change-why"]')).toBeNull();
+		expect(q('[data-test="link-head"]')).not.toBeNull();
+	});
+
+	it('offers them when can_undo is true, and when an older server says nothing', () => {
+		for (const can_undo of [true, undefined]) {
+			document.body.innerHTML = '';
+			app?.unmount();
+			mount(LinkCard, { file: linked({ can_undo }), busy: false });
+			expect(q('[data-test="link-undo"]'), String(can_undo)).not.toBeNull();
+			expect(q('[data-test="link-change"]'), String(can_undo)).not.toBeNull();
+		}
+	});
 });
 
 describe('LinkedSiblings', () => {
@@ -174,6 +193,11 @@ describe('LinkedSiblings', () => {
 		expect(q('[data-test="siblings-head"]')!.textContent!.replace(/\s+/g, ' ').trim()).toBe('Linked to S-0042 · 9 images');
 		expect(document.querySelectorAll('[data-test="sibling"]')).toHaveLength(6);
 		expect(q('[data-test="siblings-more"]')!.textContent).toBe('+2');
+		// the item itself has no label (a list item has no such role): its text is the picture-less count, named by a span that says what it is
+		expect(q('[data-test="siblings-more"]')!.hasAttribute('aria-label')).toBe(false);
+		const named = q('[data-test="siblings-more"] span')!;
+		expect(named.getAttribute('role')).toBe('img');
+		expect(named.getAttribute('aria-label')).toBe('and 2 more');
 		await vi.waitFor(() => expect(document.querySelectorAll('[data-test="sibling"] img')).toHaveLength(6));
 		expect(q('[data-test="sibling"] img')!.getAttribute('src')).toMatch(/^blob:/);
 	});

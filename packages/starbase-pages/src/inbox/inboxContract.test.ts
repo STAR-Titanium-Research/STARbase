@@ -12,7 +12,7 @@ import { badgeText, parseSummary, recordRoute, type HostApi } from '@d1/ui';
 import { inboxLines } from '../home/inboxPanel';
 import {
 	InboxApiError, acceptAll, addIgnored, correctSemSetting, dismissFiles, filesParams, getSemSettings, linkFiles, listIgnored, loadAdmin, loadFiles, loadPicture, loadPrefs, loadSiblings, loadSummary, parseFile,
-	removeIgnored, rescan, restoreFiles, savePrefs, scanAll, undoBatch,
+	removeIgnored, rescan, restoreFiles, savePrefs, scanAll, undoBatch, relinkFile,
 	type FilesQuery, type FoundFile,
 } from './inboxApi';
 import {
@@ -277,6 +277,37 @@ describe('link, dismiss, restore, undo', () => {
 		const r = await linkFiles(only(fx('link_already_linked')).api, []);
 		expect(r).toMatchObject({ link_batch_id: '', linked: 0 });
 		expect(r.items[0]).toMatchObject({ already_linked: true });
+	});
+
+	it('relink: the request is that of the fixture (one call, no undo before it), the answer is that of a link: a new batch of one', async () => {
+		const f = fx('relink_ok');
+		const { api, calls } = only(f);
+		const r = await relinkFile(api, f.request.body);
+		expect(calls).toHaveLength(1);
+		expect(calls[0]).toMatchObject({ method: 'POST', path: '/d1-inbox/relink' });
+		expect(calls[0].body).toEqual(f.request.body);
+		expect(r).toMatchObject({ link_batch_id: f.body.data.link_batch_id, linked: 1 });
+		expect(r.items[0]).toMatchObject({ candidate_id: f.request.body.candidate_id, collection: 'physical_samples' });
+	});
+
+	it.each([
+		['relink_403_not_editable', 403, 'FORBIDDEN'],
+		['relink_409_not_linked', 409, 'NOT_LINKED'],
+	])('%s throws an InboxApiError with the message of the server', async (name, status, code) => {
+		const f = fx(name);
+		const e: any = await relinkFile(only(f).api, f.request.body).catch((x) => x);
+		expect(e).toBeInstanceOf(InboxApiError);
+		expect(e).toMatchObject({ status, code, message: f.body.errors[0].message });
+	});
+
+	it('can_undo: the server says who may undo or change a link; the Link card offers those buttons only then', async () => {
+		const rows = (await loadFiles(only(fx('files_linked')).api, {})).rows;
+		expect(rows.map((r) => r.can_undo)).toEqual([true, true]);
+		expect(linkCardView(rows[0])!.canUndo).toBe(true);
+		const sib = (await loadSiblings(only(fx('siblings')).api, ID(1008), 6)).rows[0];
+		expect(sib.can_undo).toBe(false);
+		expect(linkCardView(sib)!.canUndo).toBe(false);
+		expect((await loadFiles(only(fx('files_new')).api, {})).rows.every((r) => r.can_undo === false)).toBe(true);
 	});
 
 	it.each([

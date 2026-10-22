@@ -217,37 +217,36 @@ describe('the sheet of a linked file', () => {
 		await vi.waitFor(() => expect(text('[data-test="link-confirm"]')).toContain('all 3 files linked together'));
 	});
 
-	it('Change… opens the Link dialog; choosing a record undoes the link and links the file again, and the sheet stays on it', async () => {
+	it('Change… opens the Link dialog; choosing a record is ONE relink request, and the sheet stays on the file', async () => {
 		const self = linkedPic('aaaa1111_A.tif');
 		const other = linkedPic('bbbb2222_B.tif');
-		const batch = self.link_batch_id;
 		await open([self, other], 'aaaa1111_A.tif');
 		answerItems();
 		click('[data-test="link-change"]');
 		await chooseRecord();
 		await vi.waitFor(() => expect(q('[role="dialog"]')).toBeNull());
-		expect(fake.calls.filter((c) => c.method === 'post').map((c) => c.path)).toEqual(['/d1-inbox/undo', '/d1-inbox/link']);
-		expect(fake.calls.find((c) => c.path === '/d1-inbox/undo')?.body).toEqual({ link_batch_id: batch });
-		expect(fake.calls.find((c) => c.path === '/d1-inbox/link')?.body).toMatchObject({ items: [{ candidate_id: self.candidate_id, collection: 'physical_samples', record_id: 's-picked' }] });
+		expect(fake.calls.filter((c) => c.method === 'post').map((c) => c.path)).toEqual(['/d1-inbox/relink']);
+		expect(fake.calls.find((c) => c.path === '/d1-inbox/relink')?.body).toEqual({ candidate_id: self.candidate_id, collection: 'physical_samples', record_id: 's-picked' });
 		await vi.waitFor(() => expect(squash(text('[data-test="link-head"]'))).toBe('Linked to Chosen record'));
 		expect(text('[data-test="sheet-name"]')).toBe('aaaa1111_A.tif');
 	});
 
-	it('a new link that is refused says the old one is already gone: the dialog closes and the file is no longer listed as linked', async () => {
+	it('a Change that is refused leaves the file linked where it was: the dialog stays open with the reason, and nothing else was sent', async () => {
 		const self = linkedPic('aaaa1111_A.tif');
 		const other = linkedPic('bbbb2222_B.tif');
 		await open([self, other], 'aaaa1111_A.tif', '/inbox?tab=linked');
 		answerItems();
-		// the endpoint refuses the new link (the sample cannot be edited): the undo before it went through
 		const post = fake.api.post.bind(fake.api);
 		fake.api.post = ((path: string, body?: any) =>
-			path === '/d1-inbox/link' ? Promise.reject(Object.assign(new Error('403'), { response: { status: 403, data: { errors: [{ message: 'You can only link a file to a record you can edit.', extensions: { code: 'FORBIDDEN' } }] } } })) : post(path, body)) as typeof fake.api.post;
+			path === '/d1-inbox/relink' ? Promise.reject(Object.assign(new Error('403'), { response: { status: 403, data: { errors: [{ message: 'You can only link a file to a record you can edit.', extensions: { code: 'FORBIDDEN' } }] } } })) : post(path, body)) as typeof fake.api.post;
 		click('[data-test="link-change"]');
 		await chooseRecord();
-		await vi.waitFor(() => expect(q('[role="dialog"]')).toBeNull());
-		expect(text('[data-test="notice"]')).toContain('The old link was removed, but the new one could not be made: You can only link a file to a record you can edit.');
-		await vi.waitFor(() => expect(all('[data-test="inbox-row"]')).toHaveLength(1));
-		expect(all('[data-test="inbox-row"]')[0].textContent).toContain('bbbb2222_B.tif');
+		await vi.waitFor(() => expect(text('[data-test="link-error"]')).toBe('You can only link a file to a record you can edit.'));
+		expect(q('[role="dialog"]')).not.toBeNull();
+		expect(fake.calls.filter((c) => c.method === 'post').map((c) => c.path)).toEqual([]);
+		expect(all('[data-test="inbox-row"]')).toHaveLength(2);
+		expect(text('[data-test="sheet-name"]')).toBe('aaaa1111_A.tif');
+		expect(squash(text('[data-test="link-head"]'))).not.toContain('Chosen record');
 	});
 });
 
@@ -333,7 +332,7 @@ describe('the view box page of a linked file', () => {
 		expect(text('[data-test="notice"]')).toContain('Undone');
 	});
 
-	it('a new link that is refused after the undo: the page moves on (the file is back in the Inbox) and the notice says so', async () => {
+	it('a Change that is refused: the page stays on the file, still linked where it was, and the dialog says why', async () => {
 		const a = self();
 		const b = linkedPic('bbbb2222_B.tif');
 		await mount([a, b], inFolder(a.candidate_id));
@@ -341,25 +340,37 @@ describe('the view box page of a linked file', () => {
 		answerItems();
 		const post = fake.api.post.bind(fake.api);
 		fake.api.post = ((path: string, body?: any) =>
-			path === '/d1-inbox/link' ? Promise.reject(Object.assign(new Error('403'), { response: { status: 403, data: { errors: [{ message: 'You can only link a file to a record you can edit.', extensions: { code: 'FORBIDDEN' } }] } } })) : post(path, body)) as typeof fake.api.post;
+			path === '/d1-inbox/relink' ? Promise.reject(Object.assign(new Error('403'), { response: { status: 403, data: { errors: [{ message: 'You can only link a file to a record you can edit.', extensions: { code: 'FORBIDDEN' } }] } } })) : post(path, body)) as typeof fake.api.post;
 		click('[data-test="link-change"]');
 		await chooseRecord();
-		await vi.waitFor(() => expect(q('[role="dialog"]')).toBeNull());
-		await vi.waitFor(() => expect(router.currentRoute.value.path).toBe('/inbox/file/' + b.candidate_id));
-		expect(text('[data-test="notice"]')).toContain('The old link was removed, but the new one could not be made: You can only link a file to a record you can edit.');
-		expect(text('[data-test="box-name"]')).toBe('bbbb2222_B.tif');
+		await vi.waitFor(() => expect(text('[data-test="link-error"]')).toBe('You can only link a file to a record you can edit.'));
+		expect(router.currentRoute.value.path).toBe('/inbox/file/' + a.candidate_id);
+		expect(text('[data-test="box-name"]')).toBe('aaaa1111_A.tif');
+		expect(q('[data-test="link-undo"]')).not.toBeNull();
+	});
+
+	it('an open Undo confirm does not carry over to the next file the page shows', async () => {
+		const a = self();
+		const b = linkedPic('bbbb2222_B.tif');
+		await mount([a, b], inFolder(a.candidate_id));
+		await vi.waitFor(() => expect(q('[data-test="link-undo"]')).not.toBeNull());
+		click('[data-test="link-undo"]');
+		await vi.waitFor(() => expect(q('[data-test="link-confirm"]')).not.toBeNull());
+		await router.push(inFolder(b.candidate_id));
+		await vi.waitFor(() => expect(text('[data-test="box-name"]')).toBe('bbbb2222_B.tif'));
+		expect(q('[data-test="link-confirm"]')).toBeNull();
+		expect(q<HTMLButtonElement>('[data-test="link-undo"]')!.disabled).toBe(false);
 	});
 
 	it('Change… on a batch of one: the dialog opens, and the page reads the file again once it is on the other record (it stays here)', async () => {
 		const a = self();
-		const batch = a.link_batch_id;
 		await mount([a], inFolder(a.candidate_id));
 		await vi.waitFor(() => expect(q('[data-test="link-change"]')).not.toBeNull());
 		answerItems();
 		click('[data-test="link-change"]');
 		await chooseRecord();
 		await vi.waitFor(() => expect(q('[role="dialog"]')).toBeNull());
-		expect(fake.calls.find((c) => c.path === '/d1-inbox/undo')?.body).toEqual({ link_batch_id: batch });
+		expect(fake.calls.filter((c) => c.method === 'post').map((c) => c.path)).toEqual(['/d1-inbox/relink']);
 		await vi.waitFor(() => expect(squash(text('[data-test="link-head"]'))).toBe('Linked to Chosen record'));
 		expect(router.currentRoute.value.path).toBe(`/inbox/file/${a.candidate_id}`);
 	});
