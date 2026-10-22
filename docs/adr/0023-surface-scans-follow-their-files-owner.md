@@ -37,7 +37,7 @@ grid without asking who owns the file, and a member can add someone else's owned
 ## Consequences
 
 - One release: the migration drops columns the current endpoint, worker and panel read.
-- A new admin-only route is the worker's only write path for render results; the worker token is an administrator machine user.
+- Two new admin-only routes are the worker's only write path: `POST /:id/claim` (a SQL compare-and-set, because Directus 11.17 ignores a version filter on a single-item PATCH) and `POST /:id/result`; the worker token is an administrator machine user.
 - A person who owns files may add scans of them that others see only as placeholders; scans of unowned files stay lab-wide.
 - The inbox's wording "visible to every lab member" is wrong for owned files and is changed in the inbox session's files.
 - Existing scans whose adder cannot read their owned file are reported, not deleted.

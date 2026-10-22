@@ -28,6 +28,10 @@
 //        filter, 403 otherwise; 403 FILE_LOCKED first for a file they may not see) and clears the PRIVATE render_error in the same
 //        transaction. From any state but pending: a scan stuck in 'rendering' (a worker that died) can be queued again too. Already
 //        pending: nothing is written.
+//   POST /d1-surface-scan/:id/claim   -> 200 { data: { scan_id, render_status: 'rendering', version, directus_files_id } }   ADMINISTRATORS ONLY (403 otherwise)
+//        The worker takes a pending scan: { version } (the version it read). One UPDATE ... WHERE render_status = 'pending' AND version = ?, so two jobs can
+//        never both win; 409 VERSION_CONFLICT otherwise (the worker skips the scan). Directus ignores a version filter on PATCH /items/<scan> (it only filters the
+//        read-back, answers 204 and still writes), so this route is the worker's compare-and-set, not a PATCH.
 //   POST /d1-surface-scan/:id/result  -> 200 { data: { scan_id, render_status, version } }   ADMINISTRATORS ONLY (403 otherwise)
 //        The worker's report, { version, directus_files_id, render_status: 'done'|'failed', render_error?, columns? } with columns = { cache_key,
 //        source_format, source_width, source_height, grid_width, grid_height, pixel_pitch_x_um, pixel_pitch_y_um, z_min_um, z_max_um, rendered_at? }.
@@ -114,6 +118,7 @@ export const SQL = {
 	// The worker's report: claim the row (only a row the worker still holds, 'rendering', at the version it read; the OCC trigger bumps version), then
 	// upsert the private row. The claim also needs the scan to still point at the file the worker rendered (a job that outlived a repoint must not
 	// store its grid under the new file). Bindings: [render_status, scan, version, directus_files_id] and [scan, ...RESULT_COLUMNS in order].
+	claim: "UPDATE surface_scans SET render_status = 'rendering' WHERE scan_id = ? AND version = ? AND render_status = 'pending' RETURNING scan_id, render_status, version, directus_files_id",
 	resultClaim: "UPDATE surface_scans SET render_status = ? WHERE scan_id = ? AND version = ? AND render_status = 'rendering' AND directus_files_id = ? RETURNING scan_id, render_status, version",
 	resultUpsert: `INSERT INTO d1_private.surface_scan_renders (scan_id, ${RESULT_COLUMNS.join(', ')}, updated_at)
 VALUES (?, ${RESULT_COLUMNS.map(() => '?').join(', ')}, now())
@@ -457,6 +462,24 @@ export function mount(router, context, store) {
 			await clearDataCache(req);
 		}
 		res.json({ data: { scan_id: id, render_status: 'pending' } });
+	}));
+
+	// POST /:id/claim: the worker takes a pending scan, ADMINISTRATORS ONLY. A compare-and-set in SQL (status 'pending' at the version read): Directus
+	// ignores a version filter on a single-item PATCH, so the worker cannot claim through the items API.
+	router.post('/:id/claim', route(async ({ req, res, acc }) => {
+		if (acc.admin !== true) throw new HttpError(403, 'FORBIDDEN', 'Only an administrator can claim a scan for rendering.');
+		const id = idParam(req);
+		const body = req.body;
+		const keys = isObject(body) ? Object.keys(body) : [];
+		if (!isObject(body) || keys.some((k) => k !== 'version')) throw invalid('Send { "version": <the version you read> }.');
+		if (!Number.isInteger(body.version) || body.version < 1 || body.version > INT_MAX) throw invalid('version must be the whole number you read.', 'version');
+		const row = await inTransaction(acc.user, async (trx) => {
+			const [claimed] = rowsOf(await trx.raw(SQL.claim, [id, body.version]));
+			return claimed;
+		});
+		if (!row) throw new HttpError(409, 'VERSION_CONFLICT', 'The scan changed since you read it (it is no longer pending). Read it again.');
+		await clearDataCache(req);
+		res.json({ data: { scan_id: row.scan_id, render_status: row.render_status, version: row.version, directus_files_id: row.directus_files_id } });
 	}));
 
 	// POST /:id/result: the worker reports a render (done with its columns, or failed with an error), ADMINISTRATORS ONLY (the worker's machine

@@ -52,18 +52,16 @@ def render_scan(scan_id: str) -> None:
         log.info("skip scan=%s status=%s", scan_id, row.get("render_status"))
         return
     try:
-        # Only the public status: the private render_error is cleared by POST /render (and replaced by
-        # the result), the column is no longer on this row.
-        directus_client.patch_scan(
-            scan_id, {"render_status": STATUS_RENDERING}, version=row["version"]
-        )
+        # One compare-and-set in the endpoint: 'pending' at the version read, else 409. The private
+        # render_error is cleared by POST /render (and replaced by the result).
+        claimed = directus_client.claim_scan(scan_id, row["version"])
     except VersionConflictError:
         log.info("skip scan=%s: claimed by another job", scan_id)
         return
 
     # The file this job renders: the one on the row it claimed. Every report carries it, and none is
     # posted for a scan that has been repointed to another file meanwhile.
-    files_id = row["directus_files_id"]
+    files_id = claimed["directus_files_id"]
     log.info("start scan=%s file=%s", scan_id, files_id)
     try:
         columns = _render(files_id)

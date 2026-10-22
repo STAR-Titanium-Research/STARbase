@@ -47,7 +47,7 @@ endpoint reads and writes. So the worker writes `surface_scans` in two ways only
 
 | Step | Request | Notes |
 |---|---|---|
-| Claim | `PATCH /items/surface_scans/<id>?filter[version][_eq]=<v>` with `{"render_status": "rendering"}` | A stale version means another job has the row: skipped. |
+| Claim | `POST /d1-surface-scan/<id>/claim` with `{version}` | Administrators only; one SQL compare-and-set (`pending` at that `version`). A 409 means another job has the row: skipped. Not a PATCH: Directus 11.17 ignores a `filter[version]` on a single-item PATCH (answers 204 and writes anyway). |
 | Outcome | `POST /d1-surface-scan/<id>/result` with `{version, directus_files_id, render_status: "done" \| "failed", render_error?, columns?}` | Administrators only; one transaction updates the status (only while it is `rendering`, at that `version`, and still pointing at `directus_files_id`, the file the job rendered) and upserts the private row. |
 
 A `409 VERSION_CONFLICT` from the result route means the version moved, the row is no longer
