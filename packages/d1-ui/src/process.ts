@@ -21,10 +21,11 @@ export interface AnalysisLink {
 	to: string;
 }
 
-// Machining operations are read in the Force dashboard, FAST (sintering) runs in the FAST
-// dashboard and Conform runs in the Conform plotter (the FAST plotter with a profile; it has no
-// Data Studio form, so the link is its STARbase path, which links.ts lists as a local page). Nothing
-// else has an analysis page. The dashboards open the operation from `?operation=`.
+// Machining operations are read in the Force dashboard, FAST (sintering) runs in the FAST dashboard and Conform
+// runs in the Conform plotter (the FAST plotter with a profile). The three links are written in the form of the old
+// Data Studio modules (`/d1-*-dashboard`), which no module serves any more: links.ts maps them to STARbase's
+// `/plot/force`, `/plot/fast` and `/plot/conform` pages, and the permanent links forward there from Data Studio.
+// Nothing else has an analysis page. The dashboards open the operation from `?operation=`.
 export function analysisLink(operationId: string, category: string | null | undefined): AnalysisLink | null {
 	const id = encodeURIComponent(operationId);
 	if (category === 'machining') return { label: 'View forces', to: `/d1-force-dashboard?operation=${id}` };

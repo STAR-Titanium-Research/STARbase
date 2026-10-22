@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ukInputValue, ukLocalToMs } from './ukTime';
+import { formatUkDateTime, formatUkTime, ukDate, ukInputValue, ukLocalToMs } from './clock';
 
 const iso = (ms: number) => new Date(ms).toISOString();
 
@@ -50,5 +50,15 @@ describe('ukInputValue', () => {
 		for (const t of ['2025-03-17T13:38:20Z', '2025-07-01T12:38:20Z', '2025-12-31T23:59:59Z', '2025-06-15T23:30:00Z']) {
 			expect(iso(ukLocalToMs(ukInputValue(t)))).toBe(iso(Date.parse(t)));
 		}
+	});
+});
+
+describe('showing a clock time', () => {
+	it('formats in Europe/London, including summer time', () => {
+		expect(formatUkTime('2025-03-17T13:38:20.000Z')).toBe('13:38:20');
+		expect(formatUkTime('2025-07-01T12:00:00Z')).toBe('13:00:00');
+		expect(formatUkDateTime('2025-07-01T23:30:00Z')).toBe('2025-07-02 00:30:00');
+		expect(ukDate('2025-07-01T23:30:00Z')).toBe('2025-07-02');
+		expect(formatUkTime('nonsense')).toBe('');
 	});
 });

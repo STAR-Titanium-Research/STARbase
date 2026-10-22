@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import { ConformLogError, loadLogTrace, recomputeRun, setRunWindow, stepsToCsv, formatUkDateTime } from '@d1/fast-plotting';
-import { DataTable, LoadState, Section, analysisLink, errorText, ukInputValue, ukLocalToMs, useExplorerHost, type SectionState } from '@d1/ui';
+import { ConformLogError, loadLogTrace, recomputeRun, setRunWindow, stepsToCsv, formatUkDateTime, ukInputValue, ukLocalToMs } from '@d1/fast-plotting';
+import { DataTable, LoadState, Section, analysisLink, errorText, useExplorerHost, type SectionState } from '@d1/ui';
 import { conformApi } from '../conformApi';
 import ConformTrace from '../map/ConformTrace.vue';
 import { conformThumb, type ConformThumb } from '../map/model/conformThumb';
