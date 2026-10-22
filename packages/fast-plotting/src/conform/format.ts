@@ -4,7 +4,8 @@
 // Pure: no Vue, no I/O.
 import { formatUkDateTime, formatUkTime } from './clock';
 
-export const DASH = '–';
+/** What a figure with no reading prints as: an em dash, with no unit. */
+export const DASH = '—';
 
 const finite = (n: number | null | undefined): n is number => typeof n === 'number' && Number.isFinite(n);
 const pad2 = (n: number): string => String(n).padStart(2, '0');
@@ -74,3 +75,67 @@ export function wholeLogNote(
 	const who = w.readable === false ? 'another run' : w.label;
 	return `The whole log is ${who}'s window: narrow that run's window first`;
 }
+
+// ---- one table of Conform figures (labels in sentence case, units, number rule), for all three surfaces
+
+/**
+ * DESIGN.md 5b's number rule: integers from 100, one decimal from 10, up to two below, without trailing zeros.
+ * Null for no reading.
+ */
+export function niceNumber(n: number | null | undefined): string | null {
+	if (!finite(n)) return null;
+	const a = Math.abs(n);
+	const digits = a >= 100 ? 0 : a >= 10 ? 1 : 2;
+	return String(Number(n.toFixed(digits)));
+}
+
+type FigureKind = 'nice' | 'kwh' | 'kw' | 'duration';
+export interface ConformFigure { label: string; unit: string; kind: FigureKind }
+
+/** Every Conform summary figure, keyed by its `ConformSummary` key (energy parts as `energy_<part>`). */
+export const CONFORM_FIGURES = {
+	duration_s: { label: 'Duration', unit: '', kind: 'duration' },
+	extruding_s: { label: 'Extruding time', unit: '', kind: 'duration' },
+	mean_wheel_speed_rpm: { label: 'Mean wheel speed', unit: 'rpm', kind: 'nice' },
+	mean_torque_pct: { label: 'Mean motor torque', unit: '%', kind: 'nice' },
+	mean_tooling1_c: { label: 'Mean tooling 1', unit: '°C', kind: 'nice' },
+	peak_torque_pct: { label: 'Peak motor torque', unit: '%', kind: 'nice' },
+	peak_motor_current_a: { label: 'Peak motor current', unit: 'A', kind: 'nice' },
+	peak_tooling1_c: { label: 'Peak tooling 1', unit: '°C', kind: 'nice' },
+	peak_wheel_temp_c: { label: 'Peak wheel temperature', unit: '°C', kind: 'nice' },
+	ips_setpoint_c: { label: 'IPS setpoint', unit: '°C', kind: 'nice' },
+	energy_motor: { label: 'Motor energy', unit: KWH_UNIT, kind: 'kwh' },
+	energy_ips: { label: 'IPS energy', unit: KWH_UNIT, kind: 'kwh' },
+	energy_cooling: { label: 'Cooling energy', unit: KWH_UNIT, kind: 'kwh' },
+	energy_total: { label: 'Total energy', unit: KWH_UNIT, kind: 'kwh' },
+	avg_demand_kw: { label: 'Average demand', unit: KW_UNIT, kind: 'kw' },
+} as const satisfies Record<string, ConformFigure>;
+export type ConformFigureKey = keyof typeof CONFORM_FIGURES;
+
+/** The number of a figure without its unit (`402`, `8.04`, `7.52`, `12 min 05 s`), or null for no reading. */
+export function figureNumber(key: ConformFigureKey, value: number | null | undefined): string | null {
+	const f: ConformFigure = CONFORM_FIGURES[key];
+	if (!finite(value)) return null;
+	if (f.kind === 'duration') return formatDuration(value);
+	if (f.kind === 'kwh' || f.kind === 'kw') return fixed(value, 2);
+	return niceNumber(value);
+}
+
+/** A figure with its unit (`402 °C`, `7.52 kWh`, `12 min 05 s`), or an em dash with no unit for no reading. */
+export function formatFigure(key: ConformFigureKey, value: number | null | undefined): string {
+	const n = figureNumber(key, value);
+	if (n === null) return DASH;
+	const unit = CONFORM_FIGURES[key].unit;
+	return unit ? `${n} ${unit}` : n;
+}
+
+// ---- the run status, worded and toned the same on every surface
+
+export type ConformStatus = 'no_log' | 'no_window' | 'done' | 'error';
+export type ConformTone = 'neutral' | 'warning' | 'success' | 'danger';
+export const CONFORM_STATUS: Record<ConformStatus, { label: string; tone: ConformTone; hint: string }> = {
+	no_log: { label: 'No log', tone: 'neutral', hint: 'No Conform log is linked to this run' },
+	no_window: { label: 'No run window', tone: 'warning', hint: 'A log is linked, but the run window is not set' },
+	done: { label: 'Window set', tone: 'success', hint: 'The run window and its summary are saved' },
+	error: { label: 'Failed', tone: 'danger', hint: 'The log could not be processed' },
+};

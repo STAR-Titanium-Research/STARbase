@@ -11,6 +11,19 @@ const PARTS = new Intl.DateTimeFormat('en-GB', {
 });
 
 const toMs = (t: string | number): number => (typeof t === 'number' ? t : Date.parse(t));
+const DISPLAY_DATE = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', day: 'numeric', month: 'short', year: 'numeric' });
+
+/** `17 Mar 2025` in UK local time, the kit's display form of a date. Empty string for an invalid instant. ISO dates belong in inputs only. */
+export function formatUkDate(t: string | number): string {
+	const ms = toMs(t);
+	return Number.isNaN(ms) ? '' : DISPLAY_DATE.format(ms);
+}
+
+/** `17 Mar 2025, 13:38:20` in UK local time. Empty string for an invalid instant. */
+export function formatUkDateTimeDisplay(t: string | number): string {
+	const ms = toMs(t);
+	return Number.isNaN(ms) ? '' : `${DISPLAY_DATE.format(ms)}, ${TIME.format(ms)}`;
+}
 
 /** `HH:MM:SS` in UK local time. Empty string for an invalid instant. */
 export function formatUkTime(t: string | number): string {
