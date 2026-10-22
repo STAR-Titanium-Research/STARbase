@@ -55,6 +55,6 @@ left it unowned. Directus, the crawler and the indexer connect as the same Postg
 
 ## Verification
 
-`tests/phase1_schema.sh` (migration 206 up and down, a Directus-style write refused, a writer accepted),
+`tests/schema/190-pointer-row-guard.sh` (run by `tests/phase1_schema.sh`: migration 206 up and down, a Directus-style write refused, a writer accepted),
 `tests/scripts/test_pointer_row_write_guard.py`, the crawler and indexer tests under the real guard, and physical-test items
 FP1 to FP3.

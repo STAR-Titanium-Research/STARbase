@@ -7,7 +7,7 @@
 # Failures: a harness stage that fails (image build, postgres start, dbmate up/rollback, seed)
 # prints a greppable `FAIL harness: <stage> (exit N)` line plus that stage's full output, and
 # the script exits non-zero (cleanup still runs). Otherwise the exit status is that of
-# tests/phase1_schema.sh, which is non-zero whenever any check fails (4 do today), so the gate
+# tests/phase1_schema.sh, which is non-zero whenever any check fails, so the gate
 # for later tasks is "no new FAIL lines vs baseline.txt"; the exit code is extra signal.
 #
 # Workaround, local only: migration 20261001000123 (operator back-fill) fails on an empty

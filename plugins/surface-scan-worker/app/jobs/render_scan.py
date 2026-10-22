@@ -10,8 +10,10 @@ the key skips the read of the file altogether.
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
+import os
 from datetime import UTC, datetime
 
 from app.lib import archive, directus_client, grid, minio_client, topography
@@ -50,18 +52,16 @@ def render_scan(scan_id: str) -> None:
         log.info("skip scan=%s status=%s", scan_id, row.get("render_status"))
         return
     try:
-        # Only the public status: the private render_error is cleared by POST /render (and replaced by
-        # the result), the column is no longer on this row.
-        directus_client.patch_scan(
-            scan_id, {"render_status": STATUS_RENDERING}, version=row["version"]
-        )
+        # One compare-and-set in the endpoint: 'pending' at the version read, else 409. The private
+        # render_error is cleared by POST /render (and replaced by the result).
+        claimed = directus_client.claim_scan(scan_id, row["version"])
     except VersionConflictError:
         log.info("skip scan=%s: claimed by another job", scan_id)
         return
 
     # The file this job renders: the one on the row it claimed. Every report carries it, and none is
     # posted for a scan that has been repointed to another file meanwhile.
-    files_id = row["directus_files_id"]
+    files_id = claimed["directus_files_id"]
     log.info("start scan=%s file=%s", scan_id, files_id)
     try:
         columns = _render(files_id)
@@ -111,7 +111,13 @@ def _render(directus_files_id: str) -> dict:
         )
     archive_path = (file_row.get("metadata") or {}).get("archive_path")
     archive.check_identity(file_row.get("id"), archive_path)
+    owner = (file_row.get("owner_person_id"), file_row.get("owner_team_id"))
+    team_folders = functools.cache(lambda: directus_client.get_team_folders())
+    archive.check_owner_stamped(archive_path, *owner, team_folders)
     path = archive.resolve(archive_path)
+    # A link inside the archive can lead from a harmless folder into someone's: check where it lands too.
+    root = os.path.realpath(archive.ARCHIVE_ROOT)
+    archive.check_owner_stamped(os.path.relpath(path, root), *owner, team_folders)
     st = archive.stat_file(path)
 
     key = cache_key(

@@ -12,7 +12,7 @@ import SurfaceScansPanel from './SurfaceScansPanel.vue';
 // The viewer is WebGL: a stand-in that can say the scan is locked (what the real one does on a 403 FILE_LOCKED), as the test asks.
 const viewerHook = vi.hoisted(() => ({ locked: null as null | (() => void) }));
 vi.mock('./viewer/SurfaceScanViewer.vue', () => ({
-	default: { props: ['scanId'], emits: ['locked', 'rerendered'], setup(_p: unknown, { emit }: any) { viewerHook.locked = () => emit('locked'); return () => null; } },
+	default: { props: ['scanId'], emits: ['locked', 'rerendered'], setup(p: { scanId: string }, { emit }: any) { viewerHook.locked = () => emit('locked', p.scanId); return () => null; } },
 }));
 
 const INSERT = '00000000-0000-4000-8000-0000000000a1';

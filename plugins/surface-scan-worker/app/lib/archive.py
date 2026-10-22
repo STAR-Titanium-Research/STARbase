@@ -18,6 +18,8 @@ mtime) that :func:`stat_file` saw. SurfaceTopography then reads through that des
 never through the path again, so a link swapped in after the check cannot redirect the read. (The
 library accepts file objects for every reader on the allowlist; a reader that insisted on a path would
 fail with "could not be read", never fall back to opening the path itself.)
+* a file in a personal folder (``User/<alias>``) or a team's folder (``Shared/<team folder>``) whose
+  pointer row carries no owner stamp (:func:`check_owner_stamped`).
 """
 
 from __future__ import annotations
@@ -25,6 +27,7 @@ from __future__ import annotations
 import os
 import stat
 import uuid
+from collections.abc import Callable, Collection
 from pathlib import Path, PurePosixPath
 from typing import BinaryIO
 
@@ -52,6 +55,14 @@ ALLOWED_EXTENSIONS: frozenset[str] = frozenset(
 #: a pointer row is ``uuid5(_NS, "file:" + <path relative to ARCHIVE_ROOT>)``. The crawler registers its
 #: pointer rows with the same rule. Keep this value identical to that script's ``_NS``.
 _ID_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_DNS, "d1-database.archive-index.v1")
+
+
+#: The top-level folders the inbox crawler treats as personal (``INBOX_PERSON_DIR``, ``User`` on the lab
+#: share) and as team folders (``Shared``). A file below them belongs to one person or one team, so its
+#: pointer row must carry the owner stamp the crawler writes (ADR-0022). ``User`` and ``Users`` are always
+#: included, whatever the setting says, because refusing too much here only costs a re-render.
+PERSON_DIR = os.getenv("INBOX_PERSON_DIR", "").strip() or "User"
+TEAM_DIR = "Shared"
 
 
 class RenderError(Exception):
@@ -115,6 +126,58 @@ def check_identity(file_id: str | None, archive_path: str | None) -> None:
             "The file's archive_path does not match its id (it was edited after the file was "
             "registered), so it is not rendered."
         )
+
+
+def _fold(part: str) -> str:
+    """A folder name as the share compares it: SMB ignores case and drops trailing dots and spaces."""
+    return part.rstrip(" .").casefold()
+
+
+def _owned_folder_parts(path: str) -> list[str]:
+    return [_fold(p) for p in path.replace("\\", "/").split("/") if p and p != "."]
+
+
+def check_owner_stamped(
+    archive_path: str | None,
+    owner_person_id: str | None,
+    owner_team_id: str | None,
+    team_folders: Callable[[], Collection[str]],
+) -> None:
+    """Refuse an unowned pointer row for a file in a personal or team folder.
+
+    A Lab Member can create a ``directus_files`` row whose id is derived from any path they know, so a
+    row for ``User/<someone else>/x.al3d`` can exist before the crawler has registered the real file,
+    and it passes :func:`check_identity`. The crawler stamps ``owner_person_id`` / ``owner_team_id`` on
+    every file it finds in those folders, so a row without a stamp under them was not made by it and must
+    not be rendered: the render would show the folder owner's file to the whole lab. Rows elsewhere in the
+    archive (the legacy share) have no owner by design and are not affected.
+
+    *team_folders* returns the ``teams.share_folder`` values; it is only called for a path under
+    ``Shared/<folder>``. A lookup that fails refuses the file (fails closed).
+    """
+    if owner_person_id or owner_team_id:
+        return
+    parts = _owned_folder_parts(archive_path or "")
+    if not parts:
+        return
+    person_dirs = {_fold(PERSON_DIR), "user", "users"}
+    if parts[0] in person_dirs and len(parts) >= 3:
+        raise RenderError(
+            "The file is in a personal folder but is not marked as its owner's, so it is not "
+            "rendered. The inbox crawler marks it when it next scans the folder."
+        )
+    if parts[0] == _fold(TEAM_DIR) and len(parts) >= 3:
+        try:
+            folders = {_fold(f) for f in team_folders() if isinstance(f, str)}
+        except Exception as err:  # noqa: BLE001 - any failure of the lookup refuses the file
+            raise RenderError(
+                "Could not check whether this folder belongs to a team; try rendering again later."
+            ) from err
+        if parts[1] in folders:
+            raise RenderError(
+                "The file is in a team folder but is not marked as the team's, so it is not "
+                "rendered. The inbox crawler marks it when it next scans the folder."
+            )
 
 
 def resolve(archive_path: str | None) -> Path:

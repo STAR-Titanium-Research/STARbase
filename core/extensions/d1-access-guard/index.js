@@ -111,6 +111,7 @@
 import { readFileSync } from 'node:fs';
 
 import { LAB_VIEWER_ROLE_ID, READ_ONLY_ROLE_MESSAGE } from '../d1-record-access/index.js';
+import { createsPointer, POINTER_REFUSED, repointsPointer } from './archivePointers.js';
 
 const RULES = JSON.parse(readFileSync(new URL('./rules.json', import.meta.url), 'utf8'));
 const GUARDS = RULES.guards;
@@ -651,7 +652,39 @@ export default ({ filter }, { services }) => {
     }
   }
 
+  // ADR-0022: a non-admin cannot create an archive pointer row or repoint one (see archivePointers.js). Directus names the filter of a system
+  // collection after its scope (files.create, files.update, files.upload); items.* is registered too in case a Directus version fires it for
+  // directus_files as well (the two share this function, and a refused write is refused once). Not tried on a live Directus: physical-test
+  // item IF91.
+  const refusePointerCreate = (payload, meta, context) => {
+    if (!checked(context) || !payload) return payload;
+    if (meta?.collection !== undefined && meta.collection !== 'directus_files') return payload;
+    for (const item of Array.isArray(payload) ? payload : [payload]) {
+      if (createsPointer(item)) throw forbidden(POINTER_REFUSED, { kind: 'file', collection: 'directus_files', id: '' });
+    }
+    return payload;
+  };
+  const refusePointerUpdate = async (payload, meta, context) => {
+    if (!checked(context) || !payload || typeof payload !== 'object') return payload;
+    if (meta?.collection !== undefined && meta.collection !== 'directus_files') return payload;
+    const keys = Array.isArray(meta?.keys) ? meta.keys.filter((key) => !isBlank(key) && typeof key !== 'object') : [];
+    if (!keys.length) {
+      // No key to look the stored row up by: refuse only what is a pointer on its face
+      if (createsPointer(payload)) throw forbidden(POINTER_REFUSED, { kind: 'file', collection: 'directus_files', id: '' });
+      return payload;
+    }
+    const stored = await context.database('directus_files').whereIn('id', keys).select('id', 'storage', 'filename_disk', 'metadata');
+    for (const row of stored) {
+      if (repointsPointer(row, payload)) throw forbidden(POINTER_REFUSED, { kind: 'file', collection: 'directus_files', id: String(row.id) });
+    }
+    return payload;
+  };
+  filter('files.create', refusePointerCreate);
+  filter('files.upload', refusePointerCreate);
+  filter('files.update', refusePointerUpdate);
+
   filter('items.create', async (payload, meta, context) => {
+    if (meta?.collection === 'directus_files') return refusePointerCreate(payload, meta, context);
     // Ruling O3: a non-admin cannot create a record that is already owned by a team (the owner grant and its manage rows would be made
     // with nobody having agreed to it); Transfer ownership is the only way a record becomes team-owned. A blank value is fine.
     if (OWNER_GUARDS[meta?.collection] !== undefined && checked(context) && payload) {
@@ -679,6 +712,7 @@ export default ({ filter }, { services }) => {
   filter('items.update', async (payload, meta, context) => {
     if (!checked(context) || !payload || typeof payload !== 'object') return payload;
     const collection = meta?.collection;
+    if (collection === 'directus_files') return refusePointerUpdate(payload, meta, context);
     if (collection === 'projects' && restrictAdminOnly() && 'restricted' in payload) {
       // projects have no owner guard (only the PI can update one), but the PI can restrict it: refused until A1b like the other four
       const keys = Array.isArray(meta.keys) ? meta.keys.filter((key) => !isBlank(key)) : [];

@@ -4,8 +4,9 @@ The worker is a system actor on an administrator token. It writes ``surface_scan
 ways, both optimistic-concurrency guarded on the row's ``version`` (a stale version is surfaced as
 :class:`VersionConflictError`):
 
-* the claim (``pending`` to ``rendering``): a REST PATCH with ``filter[version][_eq]=<version read>``
-  (:func:`patch_scan`), as the heavy-data worker does;
+* the claim (``pending`` to ``rendering``): ``POST /d1-surface-scan/<id>/claim`` with the version read
+  (:func:`claim_scan`), a compare-and-set in SQL. Not a PATCH with ``filter[version][_eq]``: on Directus
+  11.17 that filter only applies to the read-back (answers 204) and the write goes through regardless;
 * the outcome (``done`` or ``failed``, with the render's numbers or its error): ``POST
   /d1-surface-scan/<id>/result`` with the version read and the id of the file that was rendered in the
   body (:func:`post_result`). The route claims the row only while it is still ``rendering`` at that
@@ -42,6 +43,7 @@ LIST_FIELDS = "scan_id,render_status,version,updated_at"
 
 
 #: The endpoint that records a render's outcome (administrators only), relative to ``DIRECTUS_URL``.
+CLAIM_ROUTE = "/d1-surface-scan/{scan_id}/claim"
 RESULT_ROUTE = "/d1-surface-scan/{scan_id}/result"
 
 
@@ -77,24 +79,30 @@ def get_scan(scan_id: str) -> dict:
     return data
 
 
-def patch_scan(scan_id: str, payload: dict, version: int | None = None) -> dict:
-    """``PATCH /items/surface_scans/{id}``. With *version* the PATCH carries the OCC filter and raises
-    :class:`VersionConflictError` if no row matched. Never put ``version`` in the body."""
-    params = {"filter[version][_eq]": str(version)} if version is not None else None
-    resp = requests.patch(
-        f"{DIRECTUS_URL}/items/{COLLECTION}/{scan_id}",
-        json=payload,
-        params=params,
+def claim_scan(scan_id: str, version: int) -> dict:
+    """``POST /d1-surface-scan/{id}/claim``: take a ``pending`` scan at the *version* read.
+
+    The endpoint answers 409 (``VERSION_CONFLICT``) unless the row is still ``pending`` at that version, so
+    two jobs can never both win: the claim raises :class:`VersionConflictError` and the job skips the scan.
+    Not a PATCH on purpose: Directus 11 ignores a ``filter[version]`` on ``PATCH /items/<collection>/<id>``
+    (it only filters the read-back, answers 204 and still writes), so a PATCH cannot be a compare-and-set.
+    Returns ``{scan_id, render_status, version, directus_files_id}``.
+    """
+    resp = requests.post(
+        f"{DIRECTUS_URL}{CLAIM_ROUTE.format(scan_id=scan_id)}",
+        json={"version": version},
         headers=_headers(),
         timeout=30,
     )
-    resp.raise_for_status()
-    body = resp.json()
-    if version is not None and not body.get("data"):
+    if resp.status_code == 409:
         raise VersionConflictError(
-            f"surface scan {scan_id}: version {version} is stale"
+            f"surface scan {scan_id}: version {version} is stale (VERSION_CONFLICT)"
         )
-    return body
+    resp.raise_for_status()
+    data = resp.json().get("data")
+    if not isinstance(data, dict):
+        raise ValueError(f"surface scan {scan_id}: unexpected claim response")
+    return data
 
 
 def post_result(scan_id: str, payload: dict, version: int, files_id: str) -> dict:
@@ -177,24 +185,6 @@ def _occ_retry(
     )
 
 
-def update_scan(
-    scan_id: str,
-    compute: Callable[[dict], dict | None],
-    max_attempts: int | None = None,
-) -> dict | None:
-    """Read-modify-write one row's public columns under OCC (PATCH).
-
-    ``compute(current)`` gets the freshly read row and returns the PATCH payload, or None for "nothing
-    to write". On a version conflict the row is re-read and ``compute`` applied again.
-    """
-    return _occ_retry(
-        scan_id,
-        compute,
-        lambda payload, version, _row: patch_scan(scan_id, payload, version=version),
-        max_attempts,
-    )
-
-
 def report_result(
     scan_id: str,
     compute: Callable[[dict], dict | None],
@@ -202,7 +192,7 @@ def report_result(
     rendered_file_id: str | None = None,
 ) -> dict | None:
     """Read the row, then post its outcome to the result route under OCC, retrying on a 409 exactly as
-    :func:`update_scan` does.
+    the old read-modify-write did.
 
     ``compute(current)`` returns the result payload (``render_status`` plus ``render_error`` or
     ``columns``), or None for "nothing to write": callers return None when the row is no longer
@@ -265,10 +255,12 @@ def list_scans(
 
 
 def get_file(file_id: str) -> dict:
-    """``GET /files/{id}``: the file's ``storage``, ``filename_download`` and ``metadata``."""
+    """``GET /files/{id}``: the file's ``storage``, ``filename_download``, ``metadata`` and owner stamps."""
     resp = requests.get(
         f"{DIRECTUS_URL}/files/{file_id}",
-        params={"fields": "id,storage,filename_download,filesize,metadata"},
+        params={
+            "fields": "id,storage,filename_download,filesize,metadata,owner_person_id,owner_team_id"
+        },
         headers=_headers(),
         timeout=30,
     )
@@ -276,6 +268,27 @@ def get_file(file_id: str) -> dict:
     if not isinstance(data, dict):
         raise ValueError(f"file {file_id}: unexpected GET response")
     return data
+
+
+def get_team_folders() -> list[str]:
+    """The ``teams.share_folder`` values: the folders under ``Shared/`` that belong to a team. Raises on
+    any failure (including a 403), so the caller refuses the file instead of treating the folder as free."""
+    resp = requests.get(
+        f"{DIRECTUS_URL}/items/teams",
+        params={
+            "filter[share_folder][_nnull]": "true",
+            "fields": "share_folder",
+            "limit": "-1",
+        },
+        headers=_headers(),
+        timeout=30,
+    )
+    data = _data(resp)
+    if not isinstance(data, list):
+        raise ValueError("teams: unexpected GET response")
+    return [
+        r["share_folder"] for r in data if isinstance(r, dict) and r.get("share_folder")
+    ]
 
 
 def get_fingerprint(file_id: str) -> dict | None:

@@ -48,7 +48,7 @@ Migration count: !`ls db/migrations/*.sql | wc -l` (see the CI rollback gotcha b
   `WITH (security_invoker = true)`. **`CREATE OR REPLACE VIEW` without the `WITH (...)` clause resets that option and
   silently re-opens the Ask-DB row-security bypass** (migration `…168`, ADR-0014); say it again every time you redefine
   one. A new table you grant to that role needs row-level-security policies like migration 168's (or an entry in
-  the reference list in `tests/phase1_schema.sh` if it holds no record data). A view that is security-invoker
+  the reference list in `tests/schema/010-core-tables-views-seed.sh` if it holds no record data). A view that is security-invoker
   must not read `d1_private.hidden_records` directly: use `d1_private.is_hidden()`. phase1 asserts both.
 
 ## Verify — don't stop at "it looks right"
@@ -62,7 +62,7 @@ Migration count: !`ls db/migrations/*.sql | wc -l` (see the CI rollback gotcha b
    ```
    With the stack up you can instead point `DATABASE_URL` at a **scratch** database. Never at the
    real one: the script rolls back and the tests write rows.
-3. Add a test section to `tests/phase1_schema.sh` for anything with behaviour (constraints,
+3. Add a test file under `tests/schema/` (named for the feature; `tests/schema/lib.sh` is the harness) for anything with behaviour (constraints,
    triggers, back-fills, Directus metadata). The `round bar form migration` section is the
    pattern: run the file's up and down SQL inside a rolled-back transaction and assert both.
 4. Update `docs/data-dictionary.md` for new tables and columns users will query.

@@ -73,41 +73,55 @@ def enqueue_pending(queue: Queue) -> int:
 
 
 TOKEN_MESSAGE = (
-    "The surface-scan worker's Directus token is not an administrator's (the result route answered "
-    "%s). Without it no render outcome can be recorded and every row stays 'rendering'. Set "
-    "SURFACE_SCAN_DIRECTUS_TOKEN (or WORKER_DIRECTUS_TOKEN) to the static token of an ADMINISTRATOR "
-    "machine user, then restart the worker. Exiting."
+    "The surface-scan worker's Directus token was refused by the result route (it answered %s: 403 "
+    "means the token is not an administrator's, 401 that Directus does not know the token or it is "
+    "blank). Without an ADMINISTRATOR's token no render outcome can be recorded and every row stays "
+    "'rendering'. Set SURFACE_SCAN_DIRECTUS_TOKEN (or WORKER_DIRECTUS_TOKEN) to the static token of an "
+    "ADMINISTRATOR machine user, then restart the worker. Exiting."
 )
 
+TOKEN_REFUSED = "refused"
+TOKEN_OK = "ok"
+TOKEN_UNKNOWN = "unknown"
 
-def verify_token() -> bool:
-    """Probe ``POST /d1-surface-scan/<nil uuid>/result`` once. Returns False when the token is
-    definitely refused (403, or 401 for a token Directus does not know); True otherwise.
+
+def probe_token() -> str:
+    """Probe ``POST /d1-surface-scan/<nil uuid>/result``. Returns :data:`TOKEN_REFUSED` when the token is
+    definitely refused (403, or 401 for a token Directus does not know), :data:`TOKEN_OK` on a definite
+    acceptance, and :data:`TOKEN_UNKNOWN` when the probe could not tell yet.
 
     An administrator gets 409 (no such row, nothing written) and a 400 means the body drifted from the
-    route's: both carry on. A connection error, a 5xx, a 404 (the endpoint is not deployed yet) or
-    anything else unexpected only logs a warning (Directus may still be starting): the worker must not
-    die for a problem that mends itself.
+    route's: both are an acceptance. A connection error, a 5xx, a 404 (the endpoint is not deployed yet)
+    or anything else unexpected only logs a warning and is "unknown" (Directus may still be starting, as
+    on a cold start of the whole stack): the worker must not die for a problem that mends itself, and
+    the poll loop asks again until it gets a definite answer.
     """
     try:
         status = directus_client.probe_result_route()
     except requests.RequestException as err:
-        log.warning("token probe: Directus could not be reached (%s); carrying on", err)
-        return True
+        log.warning(
+            "token probe: Directus could not be reached (%s); will ask again", err
+        )
+        return TOKEN_UNKNOWN
     if status in (401, 403):
         log.critical(TOKEN_MESSAGE, status)
-        return False
+        return TOKEN_REFUSED
     if status in (409, 400):
         log.info(
             "token probe: the result route accepts the worker's token (%s)", status
         )
-        return True
+        return TOKEN_OK
     log.warning(
         "token probe: unexpected answer %s from the result route (Directus still starting, or the "
-        "endpoint not deployed?); carrying on",
+        "endpoint not deployed?); will ask again",
         status,
     )
-    return True
+    return TOKEN_UNKNOWN
+
+
+def verify_token() -> bool:
+    """False only when the token is definitely refused (see :func:`probe_token`)."""
+    return probe_token() != TOKEN_REFUSED
 
 
 def _fail(scan_id: str, message: str) -> bool:
@@ -183,7 +197,8 @@ def started_at() -> datetime:
 
 def run_forever() -> None:
     logging.basicConfig(level=logging.INFO)
-    if not verify_token():
+    token_state = probe_token()
+    if token_state == TOKEN_REFUSED:
         sys.exit(1)  # entrypoint.sh takes the container down when any child dies
     queue = Queue(QUEUE_NAME, connection=get_redis())
     interval = poll_interval_seconds()
@@ -201,6 +216,12 @@ def run_forever() -> None:
         except Exception:
             # Directus or Redis may be down at container start: keep trying.
             log.exception("poll pass failed")
+        if token_state == TOKEN_UNKNOWN:
+            # A cold start of the whole stack usually reaches us before Directus is up: keep asking until
+            # the route answers definitely, so a non-administrator token is still caught.
+            token_state = probe_token()
+            if token_state == TOKEN_REFUSED:
+                sys.exit(1)
         time.sleep(interval)
 
 

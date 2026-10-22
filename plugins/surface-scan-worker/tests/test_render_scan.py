@@ -58,12 +58,16 @@ def test_happy_path_renders_and_fills_the_row(world):
     assert re.match(r"^\d{4}-\d\d-\d\dT", row["rendered_at"])
 
 
-def test_the_claim_patches_only_the_public_status(world):
-    """render_error and the render columns are not on the public row (ADR-0023): never PATCH them."""
+def test_the_claim_carries_the_version_read_and_nothing_else(world):
+    """The claim route takes only the version read (ADR-0023: render_error and the render columns are
+    private); the row is 'rendering' at the next version afterwards."""
     _scan_file(world)
-    world.add_scan()
+    row = world.add_scan()
+    version = row["version"]
     job.render_scan(SCAN)
-    assert world.history == [(SCAN, {"render_status": "rendering"})]
+    assert world.history == [
+        (SCAN, {"render_status": "rendering", "claim_version": version})
+    ]
 
 
 RESULT_COLUMNS = {
@@ -650,3 +654,80 @@ def test_a_file_row_with_the_derived_id_renders(world):
     world.add_scan()
     job.render_scan(SCAN)
     assert world.rows[SCAN]["render_status"] == "done"
+
+
+# --- ADR-0022: a file in a personal or team folder needs the owner stamp the crawler writes ---------------
+
+
+def _owned_scan(world, rel, **owner):
+    (world.root / rel).parent.mkdir(parents=True, exist_ok=True)
+    path = write_al3d(world.root / rel, ramp(20, 30))
+    assert path.exists()
+    world.add_file(rel, **owner)
+    world.add_scan()
+
+
+def test_an_unowned_row_for_a_personal_folder_file_is_not_rendered(world):
+    """A member made the pointer row first for a path in someone's folder: the row has no stamp."""
+    _owned_scan(world, "User/ab123/private.al3d")
+    _fails(world, "personal folder")
+    assert not world.objects
+
+
+def test_the_other_spelling_of_the_person_folder_is_refused_too(world):
+    for rel in ("Users/ab123/p.al3d", "USER/AB123/p.al3d", "user./ab123/p.al3d"):
+        world.rows.clear()
+        world.renders.clear()
+        world.history.clear()
+        world.results.clear()
+        _owned_scan(world, rel)
+        _fails(world, "personal folder")
+
+
+def test_a_personal_folder_file_with_a_stamp_renders(world):
+    _owned_scan(world, "User/ab123/ok.al3d", owner_person_id="p-1")
+    job.render_scan(SCAN)
+    assert world.rows[SCAN]["render_status"] == "done"
+
+
+def test_an_unowned_row_in_a_tied_team_folder_is_not_rendered(world):
+    _owned_scan(world, "Shared/Alloys/x.al3d")
+    _fails(world, "team folder")
+    assert not world.objects
+
+
+def test_a_team_folder_file_with_a_stamp_renders(world):
+    _owned_scan(world, "Shared/Alloys/x.al3d", owner_team_id="t-1")
+    job.render_scan(SCAN)
+    assert world.rows[SCAN]["render_status"] == "done"
+
+
+def test_an_unowned_row_in_an_untied_shared_folder_renders(world):
+    """Shared/<folder> that no team claims is the legacy archive: open, as ADR-0022 decision 5 says."""
+    _owned_scan(world, "Shared/Misc/x.al3d")
+    job.render_scan(SCAN)
+    assert world.rows[SCAN]["render_status"] == "done"
+
+
+def test_a_failed_team_lookup_refuses_a_shared_file(world):
+    world.team_folders = RuntimeError("403")
+    _owned_scan(world, "Shared/Misc/x.al3d")
+    _fails(world, "Could not check")
+
+
+def test_an_unowned_row_elsewhere_in_the_archive_renders(world):
+    _scan_file(world)
+    world.add_scan()
+    job.render_scan(SCAN)
+    assert world.rows[SCAN]["render_status"] == "done"
+
+
+def test_a_link_from_a_harmless_folder_into_a_personal_one_is_refused(world):
+    (world.root / "User" / "ab123").mkdir(parents=True)
+    target = write_al3d(world.root / "User" / "ab123" / "private.al3d", ramp(20, 30))
+    link = world.root / "rig" / "innocent.al3d"
+    os.symlink(target, link)
+    world.add_file("rig/innocent.al3d")
+    world.add_scan()
+    _fails(world, "personal folder")
+    assert not world.objects
