@@ -35,4 +35,30 @@ describe('FastChart run-window bands', () => {
 		const html = await render({ bands: [band('a', 100, 300)] });
 		expect(html.indexOf('run-bands')).toBeLessThan(html.indexOf('class="line"'));
 	});
+	it('draws the current run as two edge lines and no wash when the view is on its window', async () => {
+		const html = await render({ bands: [band('b', 500, 800, true)], viewStart: 490, viewEnd: 810 });
+		expect(html.match(/class="wb-edge"/g)).toHaveLength(2);
+		expect(html).not.toMatch(/class="wb"/);
+	});
+	it('washes the current run, and another run, when the view is further out', async () => {
+		const html = await render({ bands: [band('a', 100, 300), band('b', 500, 800, true)] });
+		expect(html.match(/class="wb"/g)).toHaveLength(2);
+		expect(html).not.toContain('wb-edge');
+	});
+	it('prints the labels in the top margin only when asked (the top row of tiles)', async () => {
+		const withLabels = await render({ bands: [band('a', 100, 300)], bandLabels: true });
+		const without = await render({ bands: [band('a', 100, 300)], bandLabels: false });
+		expect(withLabels).toContain('wb-label');
+		expect(without).not.toContain('wb-label');
+		expect(without).toContain('run-band');   // the band itself is still drawn
+		// the label's baseline is above the plot area (the top margin), on the unit's line
+		expect(withLabels).toMatch(/class="wb-label" x="[\d.]+" y="14"/);
+	});
+});
+
+describe('FastChart time axis and hover time', () => {
+	it('titles the axis "Time (min)" by default (FAST), or as the profile words it', async () => {
+		expect(await render({})).toContain('>Time (min)</text>');
+		expect(await render({ xTitle: 'Time since log start (min)' })).toContain('>Time since log start (min)</text>');
+	});
 });

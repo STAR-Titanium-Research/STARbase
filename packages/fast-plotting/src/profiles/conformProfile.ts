@@ -65,6 +65,7 @@ export const conformProfile: RunProfile = {
 	key: 'conform',
 	title: 'Conform plotter',
 	heading: 'Conform plotter',
+	timeAxisTitle: 'Time since log start (min)',
 	peaksTitle: 'Key figures',
 	runNoun: 'Conform runs',
 	searchPlaceholder: 'Search code / feedstock',

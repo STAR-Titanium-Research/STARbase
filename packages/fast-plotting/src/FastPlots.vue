@@ -17,6 +17,7 @@ const props = defineProps<{
 	zoomStart: number | null; zoomEnd: number | null; cursor: number | null;
 	stacked: boolean;
 	bands?: RunWindowBand[]; startMs?: number | null;   // Conform only: the run windows on the log, and the clock origin of the hover
+	xTitle?: string;   // the time axis title when the profile words it (Conform); FAST keeps "Time (min)"
 }>();
 const emit = defineEmits<{ (e: 'zoom', v: { start: number; end: number } | null): void; (e: 'hover', t: number | null): void }>();
 const tiles = defineModel<Tile[]>('tiles', { required: true });
@@ -66,6 +67,8 @@ const place = (i: number) => {
 // the time labels and title go on every tile with no tile below it (every tile when stacked)
 const labelled = computed(() => hasNoTileBelow(layout.value.placements));
 const bottom = (i: number) => props.stacked || labelled.value[i];
+// the run-window labels go on the top row of tiles only (stacked: the first tile)
+const topRow = (i: number) => (props.stacked ? i === 0 : layout.value.placements[i].row === 0);
 
 // ---- series picker
 const menu = ref<{ tile: number; x: number; y: number } | null>(null);
@@ -118,7 +121,7 @@ onBeforeUnmount(() => { window.removeEventListener('click', away); window.remove
 				</header>
 				<div class="tbody">
 					<FastChart v-if="d.series.length" :time="trace.time" :series="d.series" :normalise="d.tile.normalise" :view-start="zoomStart" :view-end="zoomEnd"
-						:zoom-tool="zoomTool" :cursor="cursor" :x-labels="bottom(i)" :bands="bands" :start-ms="startMs" @zoom="emit('zoom', $event)" @hover="emit('hover', $event)" />
+						:zoom-tool="zoomTool" :cursor="cursor" :x-labels="bottom(i)" :x-title="xTitle" :bands="bands" :band-labels="topRow(i)" :start-ms="startMs"@zoom="emit('zoom', $event)" @hover="emit('hover', $event)" />
 					<button v-else class="empty-tile" @click.stop="openMenu($event, d.tile)">＋ Pick series</button>
 				</div>
 			</article>

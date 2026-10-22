@@ -35,6 +35,8 @@ export interface RunProfile {
 	title: string;
 	/** The page heading shown in the host's view frame. */
 	heading: string;
+	/** The title of every plot's time axis. Default "Time (min)" (FAST). Conform's axis counts from the log start. */
+	timeAxisTitle?: string;
 	/** The title over the figures under the run's identity. Default "Peaks" (FAST). */
 	peaksTitle?: string;
 	/** What the run list holds, for the load error: "Could not load the <runNoun>". Default "FAST operations". */
