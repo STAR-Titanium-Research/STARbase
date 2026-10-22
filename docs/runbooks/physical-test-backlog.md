@@ -3052,6 +3052,26 @@ records, and a Lab Viewer, with the Directus token of each. `POST /d1-bulk-actio
   sweep sends it on start, once. With no `getSchema`-dependent failure in the log: the timer and the sweep have no request, so `MailService` is given the schema from `getSchema()`; confirm the mail renders and
   arrives (if the transport needs the schema, this is where it would show). Since: bulk actions, PR 2.
 
+### Pointer-row write guard (2026-10-21, migration 206, ADR-0024, d1-server)
+
+Closes the forged pointer row hole (docs/superpowers/specs/2026-10-21-forged-pointer-rows-options.md). The Postgres tests prove the trigger; what only the real stack
+shows is how Directus reaches it, which Directus release is running, and that the indexer and the crawler still register files. Run on a copy of the stack, with two Lab
+Member accounts (A, B) and an administrator.
+
+- [ ] **FP1 — Does the real Directus accept a member-written `star` row, and what does the guard answer?** Note the Directus version (`GET /server/info`). **Before migration 206
+  is applied** (or on a copy that does not have it yet), as B: `POST /files` with JSON `{"id": "<uuid5('file:'+path)>", "storage": "star", "type": "image/tiff",
+  "filename_download": "x.al3d", "metadata": {"archive_path": "<path>"}}` for a path of A's that the crawler has not registered, and the same through GraphQL `create_files_item`; then, on
+  a file B uploaded, `PATCH /files/<id>` with `{"storage": "star"}`. Expect a refusal (*Storage location "star" doesn't exist*) if this Directus release validates the location; if the
+  row is created, the hole was live: record the version and the date, run **FP3**, and do not wait for the rest. **After** migration 206 the same three calls must all fail (a 500 whose message
+  names the archive indexer and the inbox crawler; nothing created or changed). Since: forged pointer rows, ADR-0024.
+- [ ] **FP2 — The indexer and the crawler still write, Directus still edits.** After `make migrate`, a crawler restart and a Directus restart: run `make inbox-crawler-once` and the indexer
+  (`make index-archive`) against a folder with a new `.al3d`: the rows appear (`storage = 'star'`), the crawler stamps the owner, no `insufficient_privilege` in either log. As A in
+  Data Studio: rename a pointer row's title, move it to another folder, add a tag: all work; try to edit its `metadata` JSON so `archive_path` changes: refused. A normal upload (image) and
+  "Replace file" on it, as a Lab Member, still work. A surface scan of a registered file still renders (the worker is unchanged). Since: forged pointer rows, ADR-0024.
+- [ ] **FP3 — Forged rows already in the database (the detection query).** On a copy of the live database run the query in `docs/runbooks/inbox-crawler.md` ("Forged pointer rows"). Expect no
+  rows. For any row, record who made it and when, what scans or links use it, and what you did. Also check `ACTIVITY_RETENTION` in Directus's environment: if it is set, say how far back
+  `directus_activity` goes, since an older row would not be listed. Since: forged pointer rows, ADR-0024.
+
 ## Done
 
 (Move ticked items here with their date and result.)

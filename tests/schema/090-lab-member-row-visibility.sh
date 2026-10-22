@@ -445,7 +445,11 @@ fof_down=$(awk '/-- migrate:down/{f=1;next}f' "$FOF_MIG")
 SSF_MIG=$(migration surface_scans_follow_file_owner)
 ssf_down=$(awk '/-- migrate:down/{f=1;next}f' "$SSF_MIG")
 ssf_rules_up=$(awk '/^-- rules:begin/{f=1;next}/^-- rules:end/{f=0}f' "$SSF_MIG")
-lv_down="$ssf_down
+# 20261021000206 (pointer-row write guard) puts a trigger function in d1_private, which the replayed downs below drop, so its down goes before everything else (before 205's) and it is not replayed.
+PRG_MIG=$(migration pointer_row_write_guard)
+prg_down=$(awk '/-- migrate:down/{f=1;next}f' "$PRG_MIG")
+lv_down="$prg_down
+$ssf_down
 $fof_down
 $sem_down
 $fpo_down

@@ -54,6 +54,6 @@ grid without asking who owns the file, and a member can add someone else's owned
     that the crawler has not registered yet can create a row with the id the indexer would derive (`uuid5('file:'+path)`),
     add a scan of it (it is unowned, so the guard passes) and have the worker render it; the crawler's later insert conflicts and
     its owner stamp skips a file that already has a scan. The worker's id-matches-path check (PR 312) cannot tell such a row from a
-    crawler-made one. It is tracked as its own task (provenance a member cannot write: member field lists, or the crawler
-    refusing or stamping a conflicting row) and is not part of this ADR.
+    crawler-made one. It is not part of this ADR: [ADR-0024](./0024-pointer-rows-are-written-only-by-the-archive-writers.md)
+    closes it (a database trigger so only the indexer and the crawler write pointer rows, migration 206).
 - Residual unverified behaviour of Directus on a live build is checked by physical-test items SS5 and SS6.

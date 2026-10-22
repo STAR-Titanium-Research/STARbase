@@ -370,6 +370,11 @@ def main() -> int:
             return 2
         conn = psycopg2.connect(dsn)
         conn.autocommit = False
+        # Migration 206: only a session that sets d1.archive_writer = 'on' may create or repoint a pointer row
+        # (storage 'star'); this script and the inbox crawler are the archive writers, Directus never is.
+        with conn.cursor() as cur:
+            cur.execute("SELECT set_config('d1.archive_writer', 'on', false)")
+        conn.commit()
 
     now = datetime.now(UTC)
     # Folders we've already ensured this run (memoised) → avoid redundant upserts.
