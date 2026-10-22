@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_VIEW, VIEW_KEY, readViewSettings, useViewSettings, writeViewSettings } from './useViewSettings';
+import { DEFAULT_VIEW, VIEW_KEY, readOpenScanFolders, readViewSettings, scanStripKey, useViewSettings, writeOpenScanFolders, writeViewSettings } from './useViewSettings';
 
 /** A Storage that holds strings in a Map, for the tests. */
 function memory(initial: Record<string, string> = {}): Storage & { map: Map<string, string> } {
@@ -100,5 +100,21 @@ describe('the Inbox view settings', () => {
 		expect(blocked.settings).toEqual(DEFAULT_VIEW);
 		blocked.set({ preview: 'box' });
 		expect(blocked.settings.preview).toBe('box');
+	});
+});
+
+describe('the open scan progress folders', () => {
+	it('is per person, starts empty and remembers what was written', () => {
+		const s = memory();
+		expect(scanStripKey('u1')).toBe('d1.list.inbox.scan.u1');
+		expect(readOpenScanFolders('u1', s)).toEqual([]);
+		writeOpenScanFolders('u1', ['p1', 't2'], s);
+		expect(readOpenScanFolders('u1', s)).toEqual(['p1', 't2']);
+		expect(readOpenScanFolders('u2', s)).toEqual([]);
+	});
+	it('gives none for a broken value and does not throw on blocked storage', () => {
+		for (const raw of ['{x', '"p1"', '{"a":1}', '[1,"p1",null]']) expect(readOpenScanFolders('u1', memory({ [scanStripKey('u1')]: raw }))).toEqual(raw === '[1,"p1",null]' ? ['p1'] : []);
+		expect(readOpenScanFolders('u1', throwing())).toEqual([]);
+		expect(() => writeOpenScanFolders('u1', ['p1'], throwing())).not.toThrow();
 	});
 });

@@ -1,0 +1,25 @@
+{
+  "description": "the file is not linked to a sample, operation or test",
+  "request": {
+    "method": "POST",
+    "path": "/d1-inbox/relink",
+    "body": {
+      "candidate_id": "00000000-0000-4000-8000-000000001008",
+      "collection": "physical_samples",
+      "record_id": "00000000-0000-4000-8000-000000000101"
+    }
+  },
+  "status": 409,
+  "body": {
+    "errors": [
+      {
+        "message": "That file is not linked to a sample, operation or test, so there is no link to change.",
+        "extensions": {
+          "candidate_id": "00000000-0000-4000-8000-000000001008",
+          "code": "NOT_LINKED",
+          "source": "d1-inbox"
+        }
+      }
+    ]
+  }
+}

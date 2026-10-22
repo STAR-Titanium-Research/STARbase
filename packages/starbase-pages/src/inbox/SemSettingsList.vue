@@ -14,7 +14,7 @@ defineProps<{ rows: SettingRow[] }>();
 			<dd>
 				<template v-if="r.text !== null">
 					<span class="value" data-test="setting-value">{{ r.text }}</span>
-					<span v-if="r.source" class="source" :class="`src-${r.source.toLowerCase()}`" data-test="setting-source">{{ r.source }}</span>
+					<span v-if="r.source && r.source.toLowerCase() !== 'metadata'" class="source" :class="`src-${r.source.toLowerCase()}`" data-test="setting-source">{{ r.source }}</span>
 					<span v-if="r.check" class="check" title="Nothing could confirm this value: look at the image to check it." data-test="setting-check">check this</span>
 				</template>
 				<span v-else-if="r.failed" class="failed" :title="r.reason ?? undefined" data-test="setting-failed">{{ r.failed }}<template v-if="r.reason">: {{ r.reason }}</template></span>

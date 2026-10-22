@@ -89,3 +89,27 @@ export function useViewSettings(storage: Storage | null = browserStorage()) {
 	}
 	return { settings, set };
 }
+
+/**
+ * Which folders' scan progress bars the person has opened on the Inbox strip, kept per person (key d1.list.inbox.scan.<person id>, in the d1.list. family so
+ * "Forget my list views" clears it) as a list of folder owner ids. Closed by default. Wrapped like the settings above: blocked storage or a broken value is
+ * just "none open", and a choice is simply not remembered.
+ */
+export const scanStripKey = (personId: string | null | undefined): string => `d1.list.inbox.scan.${personId || 'anon'}`;
+
+export function readOpenScanFolders(personId: string | null | undefined, storage: Storage | null = browserStorage()): string[] {
+	try {
+		const v: unknown = JSON.parse(storage?.getItem(scanStripKey(personId)) ?? 'null');
+		return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
+	} catch {
+		return [];
+	}
+}
+
+export function writeOpenScanFolders(personId: string | null | undefined, open: string[], storage: Storage | null = browserStorage()): void {
+	try {
+		storage?.setItem(scanStripKey(personId), JSON.stringify(open));
+	} catch {
+		// private mode, a full disk or blocked storage: the choice just is not remembered
+	}
+}

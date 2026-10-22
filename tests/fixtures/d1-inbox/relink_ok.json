@@ -1,0 +1,28 @@
+{
+  "description": "a linked file moved to another record: its old link is undone and the new one made in one transaction",
+  "request": {
+    "method": "POST",
+    "path": "/d1-inbox/relink",
+    "body": {
+      "candidate_id": "00000000-0000-4000-8000-000000001008",
+      "collection": "physical_samples",
+      "record_id": "00000000-0000-4000-8000-000000000101"
+    }
+  },
+  "status": 200,
+  "body": {
+    "data": {
+      "link_batch_id": "00000000-0000-4000-8000-000000000905",
+      "linked": 1,
+      "items": [
+        {
+          "candidate_id": "00000000-0000-4000-8000-000000001008",
+          "collection": "physical_samples",
+          "record_id": "00000000-0000-4000-8000-000000000101",
+          "junction_id": "00000000-0000-4000-8000-000000005008",
+          "adopted": false
+        }
+      ]
+    }
+  }
+}

@@ -36,6 +36,13 @@ for (const [name, query] of Object.entries(variants)) {
   prepare(`list_${name}_scans`, buildListQuery(scope, f, { scans: true }).sql);
   prepare(`count_${name}_scans`, buildListQuery(scope, f, { count: true, scans: true }).sql);
 }
+// the siblings of a record's file (GET /siblings): the same list and count queries with the record option, once per link target
+for (const collection of ['physical_samples', 'manufacturing_operations', 'test_sessions']) {
+  const f = parseFileFilters({ tab: 'linked', kind: 'sem_image,image', limit: '7' });
+  const record = { collection, id: other, exclude: scope.personId };
+  prepare(`siblings_list_${collection}`, buildListQuery(scope, f, { record }).sql);
+  prepare(`siblings_count_${collection}`, buildListQuery(scope, f, { record, count: true }).sql);
+}
 const open = parseFileFilters({}, { defaultTab: 'open' });
 prepare('accept_open', buildListQuery(scope, open, { accept: true, pageSize: 500 }).sql);
 prepare('accept_after', buildListQuery(scope, open, { accept: true, pageSize: 500, after: { at: '2026-01-01T00:00:00.000Z', id: other } }).sql);
