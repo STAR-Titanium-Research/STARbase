@@ -87,6 +87,9 @@ describe('uploadConformLog', () => {
 
 		const form = f.calls.find((c) => c.url === '/files')!.body as FormData;
 		expect(form.get('folder')).toBe(CONFORM_LOGS_FOLDER_ID);
+		// Directus applies only the fields sent before the file part, and the log's file must be in this folder (migration 211)
+		const keys = [...form.keys()];
+		expect(keys.indexOf('folder')).toBeLessThan(keys.indexOf('file'));
 		expect(CONFORM_LOGS_FOLDER_ID).toBe('c04f1000-0000-4000-8000-000000000001');
 		expect(f.calls.some((c) => c.url === '/folders')).toBe(false);   // no lookup of the folder by name
 		const csv = await (form.get('file') as File).text();
