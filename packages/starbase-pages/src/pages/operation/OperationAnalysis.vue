@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
+import type { ConformRunBundle } from '@d1/fast-plotting';
 import ConformRunSection from './ConformRunSection.vue';
-import type { ConformRunData } from './useOperationData';
 import { DataTable, LIST_CAP, LoadState, Section, StatusBadge, analysisLink, breakableParts, formatDate, formatQuantity, type SectionState } from '@d1/ui';
 
 // Analysis of the operation's data: the force analysis of each .mat file (machining), the
@@ -13,14 +13,16 @@ const props = defineProps<{
 	force: SectionState<any[]>;
 	fast: SectionState<any | null>;
 	/** A Conform run's row, log and whether the log is hidden from this reader (conform only). */
-	conform?: SectionState<ConformRunData | null>;
+	conform?: SectionState<ConformRunBundle | null>;
 	equipmentId?: string | null;
 	operationDate?: string | null;
+	/** `planned` runs never get an operation date written from the log. */
+	workState?: string | null;
 	/** The reader may change the run (upload a log, set the window); the server still decides. */
 	canEdit?: boolean;
 }>();
 const emit = defineEmits<{ changed: [] }>();
-const noConform: SectionState<ConformRunData | null> = { data: null, loading: false, error: '' };
+const noConform: SectionState<ConformRunBundle | null> = { data: null, loading: false, error: '' };
 
 const link = computed(() => analysisLink(props.operationId, props.category));
 const capped = computed(() => props.force.data.length > LIST_CAP);
@@ -98,6 +100,7 @@ const isMachining = computed(() => props.category === 'machining');
 		:operation-id="operationId"
 		:equipment-id="equipmentId ?? null"
 		:operation-date="operationDate ?? null"
+		:work-state="workState ?? null"
 		:state="conform ?? noConform"
 		:can-edit="canEdit ?? true"
 		@changed="emit('changed')"

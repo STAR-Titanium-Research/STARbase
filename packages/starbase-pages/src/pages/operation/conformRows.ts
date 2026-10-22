@@ -3,8 +3,8 @@
 // @d1/fast-plotting's summary, steps and totals; no Vue, no I/O.
 
 import {
-	CONFORM_POWER_CONSTANTS, formatUkTime, type ConformLogRow, type ConformRange, type ConformRunRow, type ConformStep, type ConformSummary, type ConformTotals,
-	type EnergyKwh, type PowerPart,
+	CONFORM_POWER_CONSTANTS, DASH, formatClockRange, formatDuration, formatKw, formatKwh, formatUkTime,
+	type ConformRange, type ConformRunRow, type ConformStep, type ConformSummary, type ConformTotals, type EnergyKwh, type PowerPart,
 } from '@d1/fast-plotting';
 
 export interface TextRow {
@@ -12,21 +12,11 @@ export interface TextRow {
 	value: string;
 }
 
-const DASH = '–';
 const isNum = (n: number | null | undefined): n is number => typeof n === 'number' && Number.isFinite(n);
 
-/** `7.67 kWh`: the number to `digits` places, then the unit; a dash for no reading. */
+/** `450.2 °C`: the number to `digits` places, then the unit; a dash for no reading. Energy and demand use the shared `formatKwh` / `formatKw`. */
 export function withUnit(n: number | null | undefined, digits: number, unit: string): string {
 	return isNum(n) ? `${n.toFixed(digits)}${unit ? ` ${unit}` : ''}` : DASH;
-}
-
-/** Seconds as `H:MM:SS` (a length of time, not a clock time). */
-export function formatDuration(seconds: number | null | undefined): string {
-	if (!isNum(seconds) || seconds < 0) return DASH;
-	const s = Math.round(seconds);
-	const h = Math.floor(s / 3600);
-	const m = Math.floor((s % 3600) / 60);
-	return `${h}:${String(m).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
 }
 
 const MISSING_WORDS: Record<PowerPart, string> = { motor: 'motor current', ips: 'IPS coil', cooling: 'wheel cooling pump current' };
@@ -41,11 +31,11 @@ export function missingText(missing: readonly PowerPart[] | undefined): string {
 /** The energy of a window or a whole log: each component present, the total, and the average demand. */
 export function energyRows(energy: EnergyKwh, avgDemandKw: number): TextRow[] {
 	const rows: TextRow[] = [];
-	if (isNum(energy.motor)) rows.push({ label: 'Motor', value: withUnit(energy.motor, 2, 'kWh') });
-	if (isNum(energy.ips)) rows.push({ label: 'IPS', value: withUnit(energy.ips, 2, 'kWh') });
-	if (isNum(energy.cooling)) rows.push({ label: 'Cooling', value: withUnit(energy.cooling, 2, 'kWh') });
-	rows.push({ label: 'Total', value: withUnit(energy.total, 2, 'kWh') });
-	rows.push({ label: 'Average demand', value: withUnit(avgDemandKw, 2, 'kW') });
+	if (isNum(energy.motor)) rows.push({ label: 'Motor', value: formatKwh(energy.motor) });
+	if (isNum(energy.ips)) rows.push({ label: 'IPS', value: formatKwh(energy.ips) });
+	if (isNum(energy.cooling)) rows.push({ label: 'Cooling', value: formatKwh(energy.cooling) });
+	rows.push({ label: 'Total', value: formatKwh(energy.total) });
+	rows.push({ label: 'Average demand', value: formatKw(avgDemandKw) });
 	return rows;
 }
 
@@ -86,23 +76,24 @@ export function stepCells(s: ConformStep): string[] {
 		range(s.tooling1_c),
 		range(s.tooling2_c),
 		withUnit(s.mean_torque_pct, 1, '%'),
-		withUnit(s.energy_kwh, 3, 'kWh'),
+		formatKwh(s.energy_kwh),
 	];
 }
 
 /** The run window as UK clock times, `13:38:20 – 13:53:19`; empty when there is none. */
 export function windowText(run: Pick<ConformRunRow, 'window_start' | 'window_end'> | null | undefined): string {
-	return run?.window_start && run.window_end ? `${formatUkTime(run.window_start)} – ${formatUkTime(run.window_end)}` : '';
+	return formatClockRange(run?.window_start, run?.window_end);
 }
 
 /**
- * The run's summary and steps were worked out by older code (no version on the summary) or from older power constants (the log was
- * processed with a lower constants version): "Recompute" redoes them from the stored CSV. Only a run with a window and a readable log can.
+ * The run's summary and steps were worked out by older code (no version on the summary) or with older power constants (its
+ * `constants_version` is missing or lower than the code's): "Recompute" redoes them from the stored CSV, writing the run only.
+ * Only a run with a window can. (The log row's own `constants` are not compared: members cannot update a log.)
  */
-export function needsRecompute(run: ConformRunRow | null | undefined, log: Pick<ConformLogRow, 'constants'> | null | undefined): boolean {
-	if (!run || !log || !run.window_start || !run.window_end) return false;
-	const summaryVersion = (run.summary as { version?: number } | null)?.version;
-	return !summaryVersion || (log.constants?.version ?? 0) < CONFORM_POWER_CONSTANTS.version;
+export function needsRecompute(run: ConformRunRow | null | undefined): boolean {
+	if (!run || !run.window_start || !run.window_end) return false;
+	const s = run.summary as { version?: number; constants_version?: number } | null;
+	return !s?.version || (s.constants_version ?? 0) < CONFORM_POWER_CONSTANTS.version;
 }
 
 /** True when the run can take a log: none is linked yet. */

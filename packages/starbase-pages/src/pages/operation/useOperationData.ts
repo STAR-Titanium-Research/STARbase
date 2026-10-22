@@ -1,5 +1,5 @@
 import { onBeforeUnmount, ref, watch, type Ref } from 'vue';
-import { loadConformRun, type ConformLogRow, type ConformRunRow } from '@d1/fast-plotting';
+import { loadConformRun, type ConformRunBundle } from '@d1/fast-plotting';
 import {
 	LIST_CAP, errorText, isNotVisible, linkedFiles, paramColumns, paramRows, shareFiles, useExplorerHost, useFieldDefs, useItems, useRequestGate,
 	readHiddenLinks, useSections, type LinkedFile, type ParamRow,
@@ -11,7 +11,7 @@ import { conformApi } from '../conformApi';
 // parallel and fails on its own (same pattern as the Sample page).
 
 const OPERATION_FIELDS = [
-	'operation_id', 'pass_code', 'operation_sequence', 'operation_date', 'process_category', 'operator_name',
+	'operation_id', 'pass_code', 'operation_sequence', 'operation_date', 'work_state', 'process_category', 'operator_name',
 	'outcome_notes', 'capture_software', 'capture_frequency_khz', 'force_file_id', 'source_system',
 	'method_id.method_id', 'method_id.method_name',
 	'equipment_id.equipment_id', 'equipment_id.equipment_name',
@@ -27,13 +27,6 @@ const OPERATION_FIELDS = [
 	'output_sample_id.sample_id', 'output_sample_id.sample_code', 'output_sample_id.nickname', 'output_sample_id.form',
 	'output_sample_id.current_status',
 ];
-
-/** A Conform run as the page holds it: the run row (null while none exists), its log, and whether the log is one this reader may not see. */
-export interface ConformRunData {
-	run: ConformRunRow | null;
-	log: ConformLogRow | null;
-	logHidden: boolean;
-}
 
 // Links that read as "none" when the target is hidden by row-level visibility (ADR-0011).
 const LINK_FIELDS = ['sample_id', 'output_sample_id', 'project_id', 'campaign_id'];
@@ -53,7 +46,7 @@ export function useOperationData(id: Ref<string>) {
 	const params = section<ParamRow[]>([]);
 	const force = section<any[]>([]);
 	const fast = section<any | null>(null);
-	const conform = section<ConformRunData | null>(null);
+	const conform = section<ConformRunBundle | null>(null);
 	const files = section<LinkedFile[]>([]);
 	const shared = section<LinkedFile[]>([]);
 	const hidden = section<Record<string, boolean>>({});
