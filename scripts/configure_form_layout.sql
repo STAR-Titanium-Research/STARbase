@@ -703,7 +703,7 @@ WHERE collection = 'manufacturing_operations'
   )
   AND conditions IS NOT NULL;
 
--- The Conform group of migration 20261022000208 (ADR-0025): the same SQL as the block below, which tests/phase1_schema.sh keeps
+-- The Conform group of migration 20261022000209 (ADR-0025): the same SQL as the block below, which tests/phase1_schema.sh keeps
 -- identical to the one in that migration. It has its own markers because the "-- BEGIN FORM LAYOUT" block above stays
 -- byte-identical to migration 174. Idempotent.
 -- BEGIN CONFORM FORM LAYOUT (scripts/configure_form_layout.sql repeats this block exactly; tests/phase1_schema.sh compares them)

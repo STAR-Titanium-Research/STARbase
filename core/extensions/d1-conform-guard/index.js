@@ -1,8 +1,8 @@
 // Directus hook: d1-conform-guard
 //
 // Conform runs (docs/superpowers/specs/2026-10-21-conform-runs-design.md, plan "Review round 1"): one uploaded machine log can be
-// shared by several Conform runs, each owning a window of it (conform_run_data.window_start / window_end). Migration 207 refuses a
-// window that overlaps another run's window or lies outside the log, and migration 209 refuses to delete a log that a run still
+// shared by several Conform runs, each owning a window of it (conform_run_data.window_start / window_end). Migration 208 refuses a
+// window that overlaps another run's window or lies outside the log, and migration 210 refuses to delete a log that a run still
 // uses, with database triggers. Directus turns the exception of a trigger into a 500 "An unexpected error occurred" for a non-admin,
 // so the person who typed the window would never learn what was wrong. This filter hook runs the same checks first and refuses with
 // a 400 INVALID_PAYLOAD whose message says it in words. The triggers stay as the backstop (the hook cannot see a concurrent writer;

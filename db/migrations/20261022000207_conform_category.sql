@@ -29,7 +29,7 @@
 --   6. The twelve inline conform_* columns on manufacturing_operations, the unique index (equipment_id, conform_run_number)
 --      for Conform rows with a run number, and their Directus field rows: base hidden = true plus the condition
 --      "show when conform" (the inline-parameter convention of 143), units in options.suffix, conform_feedstock_form as a
---      dropdown. The form layout (group grp_conform) is migration 208.
+--      dropdown. The form layout (group grp_conform) is migration 209.
 --
 -- The down section restores every pre-image. It cannot restore data written under the new shape, and says where it is lossy:
 -- operations with category `conform` go back to `deformation` (their pass_code is kept: the original code functions are

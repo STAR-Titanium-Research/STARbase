@@ -8,12 +8,12 @@
 -- crashes or the group cannot be shown again), here "Hide unless conform" on process_category.
 --
 -- Field order in the group: run number, feedstock, feedstock form, feed mass, die diameter, tooling, then wheel speed and IPS
--- setpoint, then extrusion length, extrusion mass, yield, flash. The twelve conform_* fields come from migration 206 (base
--- hidden, shown by their own "show when conform" condition). The O2M alias conform_run (migration 207) joins Related records
+-- setpoint, then extrusion length, extrusion mass, yield, flash. The twelve conform_* fields come from migration 207 (base
+-- hidden, shown by their own "show when conform" condition). The O2M alias conform_run (migration 208) joins Related records
 -- at the next free sort of that group and, like fast_run, shows only for a Conform run.
 --
 -- The pre-image of the thirteen field rows this migration touches (group, sort, width, hidden, conditions) is kept in
--- d1_private.conform_form_layout_208_backup for the down section, as 174 does. An up that runs again keeps the first pre-image.
+-- d1_private.conform_form_layout_209_backup for the down section, as 174 does. An up that runs again keeps the first pre-image.
 --
 -- scripts/configure_form_layout.sql repeats the block between "-- BEGIN CONFORM FORM LAYOUT" and "-- END CONFORM FORM LAYOUT"
 -- exactly (tests/phase1_schema.sh compares them), so a configure run on a brand-new Directus ends with the same form. The block
@@ -21,19 +21,19 @@
 
 DO $$
 BEGIN
-IF to_regclass('d1_private.conform_form_layout_208_backup') IS NULL THEN
-CREATE TABLE d1_private.conform_form_layout_208_backup (
+IF to_regclass('d1_private.conform_form_layout_209_backup') IS NULL THEN
+CREATE TABLE d1_private.conform_form_layout_209_backup (
     collection TEXT NOT NULL,
     field      TEXT NOT NULL,
     row_data   JSON NOT NULL,
     PRIMARY KEY (collection, field)
 );
-COMMENT ON TABLE d1_private.conform_form_layout_208_backup IS 'Pre-image of the directus_fields rows that migration 20261022000208 (Conform form layout) regrouped: the twelve conform_* fields and the conform_run alias. migrate:down puts group, sort, width, hidden and conditions back and drops the table.';
-COMMENT ON COLUMN d1_private.conform_form_layout_208_backup.collection IS 'The Directus collection (manufacturing_operations).';
-COMMENT ON COLUMN d1_private.conform_form_layout_208_backup.field IS 'The field name.';
-COMMENT ON COLUMN d1_private.conform_form_layout_208_backup.row_data IS 'to_json of the directus_fields row as it was before the migration, including its id.';
+COMMENT ON TABLE d1_private.conform_form_layout_209_backup IS 'Pre-image of the directus_fields rows that migration 20261022000209 (Conform form layout) regrouped: the twelve conform_* fields and the conform_run alias. migrate:down puts group, sort, width, hidden and conditions back and drops the table.';
+COMMENT ON COLUMN d1_private.conform_form_layout_209_backup.collection IS 'The Directus collection (manufacturing_operations).';
+COMMENT ON COLUMN d1_private.conform_form_layout_209_backup.field IS 'The field name.';
+COMMENT ON COLUMN d1_private.conform_form_layout_209_backup.row_data IS 'to_json of the directus_fields row as it was before the migration, including its id.';
 
-INSERT INTO d1_private.conform_form_layout_208_backup (collection, field, row_data)
+INSERT INTO d1_private.conform_form_layout_209_backup (collection, field, row_data)
 SELECT f.collection, f.field, to_json(f) FROM directus_fields AS f
 WHERE f.collection = 'manufacturing_operations'
   AND f.field IN ('conform_run_number', 'conform_feedstock', 'conform_feedstock_form', 'conform_feed_mass_g',
@@ -83,15 +83,15 @@ WHERE f.collection = 'manufacturing_operations' AND f.field = 'conform_run';
 -- END CONFORM FORM LAYOUT
 
 -- migrate:down
--- Restores the exact prior metadata from d1_private.conform_form_layout_208_backup: the group row goes, the thirteen field rows get
+-- Restores the exact prior metadata from d1_private.conform_form_layout_209_backup: the group row goes, the thirteen field rows get
 -- their group, sort, width, hidden flag and conditions back; then the backup table is dropped. Metadata edited in Data Studio after
 -- the up section is lost for these columns.
 UPDATE directus_fields AS f
 SET "group" = r."group", sort = r.sort, width = r.width, hidden = r.hidden, conditions = r.conditions
-FROM d1_private.conform_form_layout_208_backup AS b,
+FROM d1_private.conform_form_layout_209_backup AS b,
      LATERAL json_populate_record(NULL::directus_fields, b.row_data) AS r
 WHERE f.collection = b.collection AND f.field = b.field;
 
 DELETE FROM directus_fields WHERE collection = 'manufacturing_operations' AND field = 'grp_conform';
 
-DROP TABLE IF EXISTS d1_private.conform_form_layout_208_backup;
+DROP TABLE IF EXISTS d1_private.conform_form_layout_209_backup;

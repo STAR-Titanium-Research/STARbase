@@ -66,7 +66,7 @@ Spec: [`2026-10-21-conform-runs-design.md`](../superpowers/specs/2026-10-21-conf
 
 ## References
 
-- Migrations `20261022000206_conform_category.sql`, `…207_conform_logs_and_run_data.sql`,
-  `…208_conform_form_layout.sql`
+- Migrations `20261022000207_conform_category.sql`, `…208_conform_logs_and_run_data.sql`,
+  `…209_conform_form_layout.sql`, `…210_conform_review_fixes.sql`
 - ADR-0004 (JSONB for dynamic method parameters, superseded by the inline columns)
 - `CONTEXT.md`: Conform run, Conform log, Run window, Step

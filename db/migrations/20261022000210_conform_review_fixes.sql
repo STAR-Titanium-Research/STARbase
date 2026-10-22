@@ -1,13 +1,13 @@
 -- migrate:up
 -- Conform runs, review round 1 (docs/superpowers/plans/2026-10-21-conform-runs.md, "Review round 1 (Opus): fixes", stream F1;
--- migrations 206 to 208 are on a pushed branch but not merged, and this one still goes in on top of them rather than editing them).
+-- migrations 207 to 209 are on a pushed branch but not merged, and this one still goes in on top of them rather than editing them).
 -- Two Opus reviews of the merged branch found these gaps, and the maintainer decided that logs are readable by every lab member
 -- while run records stay private. What this does:
 --
 --   1. conform_logs.source_sha256: the lowercase hex SHA-256 of the uploaded file's raw bytes, NOT NULL and UNIQUE, so the same
 --      file cannot be uploaded twice (the browser looks the hash up first and offers to link the existing log; Directus turns the
 --      unique violation into RECORD_NOT_UNIQUE on source_sha256). The table is new, so there is nothing to back-fill; a row that
---      already exists on a database that ran 207 gets the SHA-256 of its own log_id as a placeholder (hash-shaped, unique, and it
+--      already exists on a database that ran 208 gets the SHA-256 of its own log_id as a placeholder (hash-shaped, unique, and it
 --      matches no real file, so such an old log is simply never found by the duplicate check).
 --   2. conform_logs.run_windows: JSONB [{operation_id, start, end}], sorted by start, only runs that have both window ends,
 --      start and end as UTC ISO-8601 with milliseconds. Kept by an AFTER trigger on conform_run_data (insert, update of the
@@ -19,22 +19,22 @@
 --      hook d1-conform-guard says the same thing in words before the database does (Directus turns an unknown database error into
 --      a 500 "An unexpected error occurred" for a non-admin).
 --   4. Access (scripts/access_rules.json, `gen_access_rules.py --values --only conform_logs,directus_folders`, `--viewer-values`):
---        conform_logs read: no filter, for Lab Member and Lab Viewer (207 limited it to the uploader and to readers of a linked run);
+--        conform_logs read: no filter, for Lab Member and Lab Viewer (208 limited it to the uploader and to readers of a linked run);
 --        conform_logs create: the field list gains source_sha256 (run_windows is kept by the trigger, never written);
 --        conform_run_data create: still `{}` in the policy, because Directus does not filter create; the new `guards.conform_run_data`
 --          rule of d1-access-guard refuses a create or a repoint unless the caller passes the operation's update rule (and the log
---          exists). Update and delete already need that rule (207).
+--          exists). Update and delete already need that rule (208).
 --   5. The "Conform Logs" folder of Directus Files, fixed id c04f1000-0000-4000-8000-000000000001, seeded here (guarded by
 --      to_regclass: CI has no directus_folders table), and one read row on directus_folders for Lab Member and Lab Viewer that
 --      shows only that folder. The browser uploads into it by id.
 --   6. conform_logs gets collection sort 13 under manufacturing_methods (it shared 11 with fast_recipes).
---   7. Migration 206's adoption gap: its down turns Conform operations back into `deformation` and keeps method CF (filed under
---      `deformation`) when an operation still uses it; its up only re-files the method. This migration, which runs after 206 on a
+--   7. Migration 207's adoption gap: its down turns Conform operations back into `deformation` and keeps method CF (filed under
+--      `deformation`) when an operation still uses it; its up only re-files the method. This migration, which runs after 207 on a
 --      re-up, sets operations whose method is CF and whose category is `deformation` to `conform`, and their lineage edges
---      (output sample from input sample) back to `extruded_from`. Only those, so it also covers data that predates 206.
+--      (output sample from input sample) back to `extruded_from`. Only those, so it also covers data that predates 207.
 --
--- The down section restores the state of 207/208: the permission rows, the sort, the comment on conform_run_data.log_id, the
--- collection's field rows, and drops the new columns, triggers and functions. It does not undo the adoption in 7 (206's down maps
+-- The down section restores the state of 208/209: the permission rows, the sort, the comment on conform_run_data.log_id, the
+-- collection's field rows, and drops the new columns, triggers and functions. It does not undo the adoption in 7 (207's down maps
 -- every conform operation back to deformation) and it keeps the folder when a file is filed in it (deleting the folder would
 -- null the files' folder); an up that runs again keeps that folder.
 -- Directus caches permissions and schema: restart Directus after applying.
@@ -71,7 +71,7 @@ BEGIN
     IF p_log_id IS NULL THEN
         RETURN;
     END IF;
-    -- The lock of the window guard (migration 207): a delete of a run, which the guard does not see, cannot overwrite the list of a
+    -- The lock of the window guard (migration 208): a delete of a run, which the guard does not see, cannot overwrite the list of a
     -- transaction that is adding another window to the same log. The next statement takes a new snapshot after the lock is granted.
     PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('conform_run_data_window:' || p_log_id::text, 0));
     SELECT coalesce(pg_catalog.jsonb_agg(
@@ -122,7 +122,7 @@ CREATE TRIGGER sync_run_windows
 COMMENT ON TRIGGER sync_run_windows ON conform_run_data IS
     'Keeps conform_logs.run_windows equal to the run windows of the log.';
 
--- back-fill from the runs that exist (none, on a database that has only just had 207)
+-- back-fill from the runs that exist (none, on a database that has only just had 208)
 SELECT conform_logs_refresh_run_windows(log_id) FROM conform_logs;
 
 -- 3. A log a run still uses cannot be deleted.
@@ -164,7 +164,7 @@ WHERE NOT EXISTS (SELECT 1 FROM directus_fields f WHERE f.collection = v.collect
 UPDATE directus_collections SET sort = 13 WHERE collection = 'conform_logs' AND "group" = 'manufacturing_methods';
 
 -- 5. Access. Snapshot of `gen_access_rules.py --values --only conform_logs,directus_folders` and `--viewer-values` on 2026-10-22.
--- conform_logs: the rows 207 wrote are changed in place (Lab Member create and read; Lab Viewer read).
+-- conform_logs: the rows 208 wrote are changed in place (Lab Member create and read; Lab Viewer read).
 UPDATE directus_permissions
 SET permissions = '{}'::json
 WHERE policy IN ('20000002-0000-0000-0000-000000000002', '20000002-0000-0000-0000-000000000003')
@@ -193,8 +193,8 @@ BEGIN
 END
 $do$;
 
--- 7. Migration 206's adoption gap: Conform operations that its down turned back into deformation (method CF kept under
--- deformation, then re-filed by its up), and any CF operation that predates 206.
+-- 7. Migration 207's adoption gap: Conform operations that its down turned back into deformation (method CF kept under
+-- deformation, then re-filed by its up), and any CF operation that predates 207.
 UPDATE manufacturing_operations o
 SET process_category = 'conform'
 FROM manufacturing_methods m
@@ -211,10 +211,10 @@ WHERE o.process_category = 'conform' AND o.sample_id IS NOT NULL AND o.output_sa
 -- migrate:down
 SET LOCAL lock_timeout = '10s';
 
--- The adoption of Conform operations (7 above) is not undone: migration 206's down maps every conform operation back to
+-- The adoption of Conform operations (7 above) is not undone: migration 207's down maps every conform operation back to
 -- deformation, and nothing here can tell the adopted ones from the rest.
 
--- 6, 5. Access and the folder as 207 left them.
+-- 6, 5. Access and the folder as 208 left them.
 DELETE FROM directus_permissions
 WHERE collection = 'directus_folders' AND action = 'read'
   AND policy IN ('20000002-0000-0000-0000-000000000002', '20000002-0000-0000-0000-000000000003');
